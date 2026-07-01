@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+
+# Environment
+.env
+
+# uv
+.python-version
+
+# Database (contains real personal transaction data)
+data/finos.db
+data/finos.db-shm
+data/finos.db-wal

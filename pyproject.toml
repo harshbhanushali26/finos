@@ -1,0 +1,15 @@
+[project]
+name = "finos"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bcrypt>=5.0.0",
+    "fastapi>=0.138.0",
+    "groq>=1.5.0",
+    "openpyxl>=3.1.5",
+    "python-dotenv>=1.2.2",
+    "sqlmodel>=0.0.38",
+    "uvicorn>=0.49.0",
+]
