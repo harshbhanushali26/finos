@@ -13,13 +13,13 @@ Flow:
 
 from agent import llm as agent_llm
 from agent.pattern_matcher import match as pm_match
-from tools.tool_transactions import delete_transaction, update_transaction
+from tools.tool_transactions import add_transaction, delete_transaction, update_transaction, _ensure_category
 
 
 # ── Confirm executor ──────────────────────────────────────────────────────────
 
 def _execute_pending(session) -> str:
-    """Execute the confirmed delete or update action directly via tool functions."""
+    """Execute the confirmed delete, update, or new-category action directly via tool functions."""
     action = session.state.confirm()
     if not action:
         return "Nothing to confirm."
@@ -35,11 +35,21 @@ def _execute_pending(session) -> str:
             changes = ", ".join(f"{k} → {v}" for k, v in action["fields"].items())
             return f"Updated — {action['description']}. Changed {changes}." if "successfully" in result else f"Failed — {result}"
 
+        elif action["action_type"] == "new_category":
+            _ensure_category(action["category"], action["txn_type"], session.user_id, session.db_session)
+            result = add_transaction({
+                "type": action["txn_type"],
+                "amount": action["amount"],
+                "category": action["category"],
+                "date": action["date_str"],
+                "note": action["note"],
+            }, session)
+            return result
+
     except Exception as e:
         return f"Action failed: {str(e)}"
 
     return "Unknown action type."
-
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
@@ -77,10 +87,12 @@ def run(message: str, session) -> str:
             session.clear_history()
             return "Conversation history cleared."
 
-        # anything else — cancel state, fall through to LLM
-        session.state.reset()
-        response = agent_llm.run(text, session)
-        return response
+        if lower in ("cancel", "stop", "nevermind", "never mind"):
+            session.state.reset()
+            return "Cancelled — nothing changed."
+
+        # anything else non-digit — don't silently wipe state, ask again
+        return "Please reply with a number from the list above, or say 'cancel'."
 
     # ── AWAIT_CONFIRM — user saying yes/no ────────────────────────────────────
     if session.state.mode == "await_confirm":

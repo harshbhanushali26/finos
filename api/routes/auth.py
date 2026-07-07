@@ -13,15 +13,15 @@ from sqlmodel import Session, select
 
 from api.deps import get_current_user, get_db
 from api.schemas import LoginRequest, SignupRequest, TokenResponse, UserResponse, ChangePasswordRequest
-from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
+from config import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES, DEFAULT_PAYMENT_METHODS
 from core.auth import create_token, delete_token, hash_password, verify_password
-from core.models import Category, User
+from core.models import Category, User, PaymentMethod
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 USERNAME_RE = re.compile(r'^[a-zA-Z0-9_-]{5,30}$')
 
 
-def _seed_default_categories(user_id: int, db: Session) -> None:
+def _seed_defaults_for_new_user(user_id: int, db: Session) -> None:
     """Insert default income and expense categories for a new user."""
 
     for name in DEFAULT_INCOME_CATEGORIES:
@@ -29,6 +29,9 @@ def _seed_default_categories(user_id: int, db: Session) -> None:
 
     for name in DEFAULT_EXPENSE_CATEGORIES:
         db.add(Category(user_id=user_id, name=name, type="expense", is_default=True))
+
+    for name in DEFAULT_PAYMENT_METHODS:
+        db.add(PaymentMethod(user_id=user_id, name=name, is_default=True))
 
     db.commit()
 
@@ -63,7 +66,7 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
     db.refresh(user)
 
     # Seed default categories
-    _seed_default_categories(user.id, db)
+    _seed_defaults_for_new_user(user.id, db)
 
     # Create and return session token
     token = create_token(user.id, db)

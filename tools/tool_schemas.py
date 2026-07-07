@@ -172,11 +172,20 @@ class SetPreference(BaseModel):
 
 
 class StageDelete(BaseModel):
-    pass  # no args needed — reads from DependencyState internally
+    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type")
+    category: Optional[str] = Field(default=None, description="Filter by category name")
+    month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM")
+    date: Optional[str] = Field(default=None, description="Filter by exact date YYYY-MM-DD")
+    limit: Optional[int] = Field(default=None, description="Max number of matches to stage — pass 1 when user says 'last' or 'latest' transaction")
+
 
 class StageUpdate(BaseModel):
-    amount: Optional[float] = Field(default=None, description="New amount")
-    category: Optional[str] = Field(default=None, description="New category")
-    date: Optional[str] = Field(default=None, description="New date YYYY-MM-DD")
-    description: Optional[str] = Field(default=None, description="New description")
-    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="New type")
+    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type, to find the transaction(s) to update")
+    category: Optional[str] = Field(default=None, description="Filter by category name, to find the transaction(s) to update")
+    month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM, to find the transaction(s) to update")
+    date: Optional[str] = Field(default=None, description="Filter by exact date YYYY-MM-DD, to find the transaction(s) to update")
+    limit: Optional[int] = Field(default=None, description="Max number of matches to stage — pass 1 when user says 'last' or 'latest' transaction")
+    new_amount: Optional[float] = Field(default=None, description="New amount to set")
+    new_category: Optional[str] = Field(default=None, description="New category to set")
+    new_date: Optional[str] = Field(default=None, description="New date YYYY-MM-DD to set")
+    new_note: Optional[str] = Field(default=None, description="New note/description to set")

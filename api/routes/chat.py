@@ -57,42 +57,18 @@ def _get_or_create_session(user: User, db) -> Session:
     return _sessions[user.id]
 
 
-# async def _stream_response(response: str):
-#     """Yield SSE events word-by-word from a complete response string."""
-#     words = response.split(" ")
-#     for i, word in enumerate(words):
-#         chunk = word if i == 0 else " " + word
-#         yield f"data: {chunk}\n\n"
-#         await asyncio.sleep(0)      # yield control to event loop between tokens
-#     yield "data: [DONE]\n\n"
-
-
-# async def _stream_response(response: str):
-#     """Yield the full response as a single SSE event."""
-#     yield f"data: {response}\n\n"
-#     yield "data: [DONE]\n\n"
-
-
-
-
-# async def _stream_response(response: str):
-#     """Yield SSE events word-by-word from a complete response string."""
-#     words = response.split(" ")
-#     for i, word in enumerate(words):
-#         chunk = word if i == 0 else f"\u0020{word}"  # unicode space avoids SSE stripping
-#         yield f"data: {chunk}\n\n"
-#         await asyncio.sleep(0.02)
-#     yield "data: [DONE]\n\n"
-
-
 async def _stream_response(response: str):
-    words = response.split(" ")
+    """Yield SSE events word-by-word. Newlines are encoded as a literal
+    marker so they survive the data:-per-line SSE protocol intact —
+    otherwise a word like 'today\\n1.' becomes two physical lines and
+    the client's per-line 'data:' parser silently drops the second one."""
+    safe = response.replace("\n", "\\n")
+    words = safe.split(" ")
     for i, word in enumerate(words):
         chunk = word if i == 0 else " " + word
         yield f"data: {chunk}\n\n"
         await asyncio.sleep(0.02)
     yield "data: [DONE]\n\n"
-
 
 
 

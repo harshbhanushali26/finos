@@ -1,4 +1,4 @@
-"""AgentCore — main LLM loop for Finance Agent.
+"""AgentLLM — main LLM loop for Finance Agent.
 
 Handles Groq API calls, tool call dispatch, and multi-turn tool execution.
 Supports multiple tool calls per turn with a max limit to prevent infinite loops.
@@ -50,18 +50,32 @@ def run(user_message: str, session) -> str:
     tool_call_count = 0
     errors = []
 
+    force_tool_name = None
+    if intent == "delete":
+        force_tool_name = "stage_delete"
+    elif intent == "update":
+        force_tool_name = "stage_update"
+
     while tool_call_count < MAX_TOOL_CALLS:
 
         try:
+            if tool_call_count > 0:
+                choice = "none"
+            elif force_tool_name:
+                choice = {"type": "function", "function": {"name": force_tool_name}}
+            else:
+                choice = "auto"
+
             response = client.chat.completions.create(
                 model=MODEL,
                 messages=session.get_history(),
                 tools=tools,
-                tool_choice="none" if tool_call_count > 0 else "auto",
+                tool_choice=choice,
                 parallel_tool_calls=False
             )
         except BadRequestError as e:
             error_str = str(e)
+            print(f"\n[DEBUG BadRequestError]: {error_str}\n")
             if "tool_use_failed" in error_str:
                 try:
                     import re
@@ -131,6 +145,13 @@ def run(user_message: str, session) -> str:
                 errors.append(f"{tool_name}: {str(e)}")
 
             session.add_tool_result(tool_call.id, tool_call.function.name, result)
+
+            # stage_delete/stage_update produce an exact numbered list that
+            # must reach the user byte-for-byte — a second LLM call would
+            # paraphrase it and can drop/garble numbering. Return raw.
+            if tool_name in ("stage_delete", "stage_update") and not result.startswith("Error"):
+                session.add_message("assistant", result)
+                return result
 
         # max tool calls reached — force final response
         if tool_call_count >= MAX_TOOL_CALLS:

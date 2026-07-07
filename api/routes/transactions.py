@@ -16,7 +16,8 @@ from sqlmodel import Session, select
 
 from api.deps import get_current_user, get_db
 from api.schemas import TransactionCreate, TransactionRead, TransactionUpdate
-from core.models import Category, Transaction, User
+from core.models import Transaction, User
+from core import shared_txns
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -32,21 +33,23 @@ class SortBy(str, Enum):
     amount = "amount"
 
 
-
-def _ensure_category_exists(user_id: int, name: str, type_: str, db: Session) -> None:
-    """Auto-create a category if it doesn't exist. Mirrors bridge behavior from finance-agent."""
-
-    existing = db.exec(
-        select(Category).where(
-            Category.user_id == user_id,
-            Category.name == name,
-            Category.type == type_,
+def _validate_category_exists(user_id: int, name: str, type_: str, db: Session) -> None:
+    """Reject if category doesn't already exist. Categories are dropdown-only —
+    created via the Manage page, never auto-created on transaction submit."""
+    if not shared_txns.category_exists(db, user_id, name, type_):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Category '{name}' does not exist for type '{type_}'. Add it from the Manage page first.",
         )
-    ).first()
 
-    if not existing:
-        db.add(Category(user_id=user_id, name=name, type=type_, is_default=False))
-        db.commit()
+
+def _validate_payment_method_exists(user_id: int, name: str, db: Session) -> None:
+    """Reject if payment method doesn't already exist. Same dropdown-only rule as categories."""
+    if not shared_txns.payment_method_exists(db, user_id, name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Payment method '{name}' does not exist. Add it from the Manage page first.",
+        )
 
 
 @router.post("/", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
@@ -58,36 +61,44 @@ def add_transaction(
 
     if body.type not in ("income", "expense"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="type must be 'income' or 'expense'",
         )
 
+    _validate_category_exists(current_user.id, body.category, body.type, db)
 
-    _ensure_category_exists(current_user.id, body.category, body.type, db)
+    if body.payment_method:
+        _validate_payment_method_exists(current_user.id, body.payment_method, db)
 
-    txn = Transaction(
-        user_id=current_user.id,
-        amount=body.amount,
-        type=body.type,
-        category=body.category,
-        date=body.date,
-        note=body.note or "",
+    # NEW (point 1a): form/API path now gets the same duplicate check chat already had.
+    duplicate = shared_txns.find_duplicate(
+        db, current_user.id, body.type, body.amount, body.category, body.date
     )
 
-    db.add(txn)
-    db.commit()
-    db.refresh(txn)
-    return txn
+    txn = shared_txns.insert_transaction(
+        db, current_user.id, body.type, body.amount, body.category, body.date,
+        note=body.note or "", payment_method=body.payment_method,
+    )
+
+    response = TransactionRead(**txn.model_dump())
+    if duplicate:
+        # requires TransactionRead to have: duplicate_warning: str | None = None
+        response.duplicate_warning = (
+            f"Possible duplicate — a {body.type} of {body.amount:,.0f} for "
+            f"{body.category} on {body.date} already existed before this entry."
+        )
+    return response
 
 
 @router.get("/", response_model=list[TransactionRead])
 def list_transactions(
     type: Optional[str] = None,
     category: Optional[str] = None,
+    payment_method: Optional[str] = None,
     date: Optional[dt_date] = None,
     date_from: Optional[dt_date] = None,
     date_to: Optional[dt_date] = None,
-    month: Optional[str] = None,       # "2026-06" format
+    month: Optional[str] = None,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
     sort_by: list[SortBy] = Query(default=[SortBy.date]),
@@ -111,6 +122,9 @@ def list_transactions(
 
     if category:
         query = query.where(Transaction.category == category)
+
+    if payment_method:
+        query = query.where(Transaction.payment_method == payment_method)
 
     if date:
         query = query.where(Transaction.date == date)
@@ -140,7 +154,6 @@ def list_transactions(
     if amount_max is not None:
         query = query.where(Transaction.amount <= amount_max)
 
-    # Build order clauses — first item in sort_by is primary sort
     column_map = {
         SortBy.date: Transaction.date,
         SortBy.amount: Transaction.amount,
@@ -162,18 +175,19 @@ def update_transaction(
     db: Session = Depends(get_db)
 ):
 
-    txn = db.get(Transaction, transaction_id)
-    if not txn or txn.user_id != current_user.id:
+    txn = shared_txns.get_owned_transaction(db, current_user.id, transaction_id)
+    if not txn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
-    # Only update fields that were explicitly provided
     update_data = body.model_dump(exclude_none=True)
     for field, value in update_data.items():
         setattr(txn, field, value)
 
-    # If category changed, ensure the new category exists
     if "category" in update_data:
-        _ensure_category_exists(current_user.id, txn.category, txn.type, db)
+        _validate_category_exists(current_user.id, txn.category, txn.type, db)
+
+    if "payment_method" in update_data:
+        _validate_payment_method_exists(current_user.id, txn.payment_method, db)
 
     db.add(txn)
     db.commit()
@@ -188,15 +202,10 @@ def delete_transaction(
     db: Session = Depends(get_db),
 ):
 
-    txn = db.get(Transaction, transaction_id)
-    if not txn or txn.user_id != current_user.id:
+    txn = shared_txns.get_owned_transaction(db, current_user.id, transaction_id)
+    if not txn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
     db.delete(txn)
     db.commit()
     return {"detail": f"Transaction {transaction_id} deleted"}
-
-
-
-
-

@@ -8,20 +8,18 @@ from datetime import datetime, date as dt_date
 from sqlmodel import select
 
 from core.models import Transaction, Category
+from core import shared_txns
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _ensure_category(name: str, txn_type: str, user_id: int, db) -> None:
-    """Create category if it doesn't already exist for this user."""
-    existing = db.exec(
-        select(Category).where(
-            Category.user_id == user_id,
-            Category.name == name,
-            Category.type == txn_type,
-        )
-    ).first()
-    if not existing:
+    """Create category if it doesn't already exist for this user.
+    Silent auto-create — used only by update_transaction. This is the
+    documented deferred inconsistency (chained-confirmation complexity not
+    worth it yet), deliberately NOT unified with add_transaction's
+    confirm-before-create flow."""
+    if not shared_txns.category_exists(db, user_id, name, txn_type):
         db.add(Category(user_id=user_id, name=name, type=txn_type, is_default=False))
         db.commit()
 
@@ -46,31 +44,28 @@ def add_transaction(args: dict, session) -> str:
         date_str = args["date"]
         note = args.get("description") or args.get("note") or ""
 
-        _ensure_category(category, txn_type, session.user_id, db)
-
-        # duplicate detection — same type/amount/category/date within this user
-        parsed_date = _fmt_date(date_str)
-        existing = db.exec(
-            select(Transaction).where(
-                Transaction.user_id == session.user_id,
-                Transaction.type == txn_type,
-                Transaction.amount == amount,
-                Transaction.category == category,
-                Transaction.date == parsed_date,
+        if not shared_txns.category_exists(db, session.user_id, category, txn_type):
+            session.state.set_pending_direct({
+                "action_type": "new_category",
+                "category": category,
+                "txn_type": txn_type,
+                "amount": amount,
+                "date_str": date_str,
+                "note": note,
+            })
+            return (
+                f"'{category}' isn't a category yet. Create it and log this "
+                f"{txn_type} of ₹{amount:,.0f} on {date_str}? Reply yes to confirm or no to cancel."
             )
-        ).first()
 
-        txn = Transaction(
-            user_id=session.user_id,
-            amount=amount,
-            type=txn_type,
-            category=category,
-            date=parsed_date,
-            note=note,
+        parsed_date = _fmt_date(date_str)
+        existing = shared_txns.find_duplicate(
+            db, session.user_id, txn_type, amount, category, parsed_date
         )
-        db.add(txn)
-        db.commit()
-        db.refresh(txn)
+
+        shared_txns.insert_transaction(
+            db, session.user_id, txn_type, amount, category, parsed_date, note=note,
+        )
 
         if existing:
             return (
@@ -99,7 +94,6 @@ def view_transactions(args: dict, session) -> str:
         if category:
             stmt = stmt.where(Transaction.category == category)
 
-        # month filter: "2026-06" → match date between first and last of month
         month = args.get("month")
         if month:
             year, mon = map(int, month.split("-"))
@@ -109,7 +103,6 @@ def view_transactions(args: dict, session) -> str:
             month_end = dt_date(year, mon, last_day)
             stmt = stmt.where(Transaction.date >= month_start, Transaction.date <= month_end)
 
-        # explicit date range — from_date and to_date (from ViewTransactions schema)
         from_date = args.get("from_date")
         if from_date:
             stmt = stmt.where(Transaction.date >= _fmt_date(from_date))
@@ -138,7 +131,6 @@ def view_transactions(args: dict, session) -> str:
             filter_desc = " · ".join(parts) if parts else "given filters"
             return f"No transactions found for {filter_desc}"
 
-        # store in dependency state — step 1 of delete/update flow
         step_id = session.state.next_step()
         txn_list = []
         lines = []
@@ -172,9 +164,9 @@ def update_transaction(args: dict, session) -> str:
     try:
         db = session.db_session
         txn_id = args["txn_id"]
-        txn = db.get(Transaction, txn_id)
+        txn = shared_txns.get_owned_transaction(db, session.user_id, txn_id)
 
-        if not txn or txn.user_id != session.user_id:
+        if not txn:
             return f"Transaction {txn_id} not found"
 
         fields = {k: v for k, v in args.items() if k != "txn_id" and v is not None}
@@ -209,9 +201,9 @@ def delete_transaction(args: dict, session) -> str:
     try:
         db = session.db_session
         txn_id = args["txn_id"]
-        txn = db.get(Transaction, txn_id)
+        txn = shared_txns.get_owned_transaction(db, session.user_id, txn_id)
 
-        if not txn or txn.user_id != session.user_id:
+        if not txn:
             return f"Transaction {txn_id} not found"
 
         db.delete(txn)
@@ -223,46 +215,132 @@ def delete_transaction(args: dict, session) -> str:
 
 
 def stage_delete(args: dict, session) -> str:
-    """Stage transactions for deletion — resolves from last view_transactions step."""
+    """Look up matching transactions AND stage them for deletion in one call.
+    Merges the old view_transactions -> stage_delete two-step into one,
+    since the agent loop only allows one tool call per turn."""
     try:
-        latest_step = session.state._step_counter
-        if not session.state.has_step(latest_step):
-            return "No transactions staged. Please call view_transactions first."
+        db = session.db_session
+        stmt = select(Transaction).where(Transaction.user_id == session.user_id)
 
-        step_output = session.state.get_step_output(latest_step)
-        candidates = step_output["data"]["transactions"]
+        txn_type = args.get("type") or args.get("type_")
+        if txn_type:
+            stmt = stmt.where(Transaction.type == txn_type)
 
-        if not candidates:
-            return "No matching transactions found."
+        category = args.get("category")
+        if category:
+            stmt = stmt.where(Transaction.category == category)
+
+        month = args.get("month")
+        if month:
+            year, mon = map(int, month.split("-"))
+            from calendar import monthrange
+            last_day = monthrange(year, mon)[1]
+            stmt = stmt.where(Transaction.date >= dt_date(year, mon, 1),
+                                Transaction.date <= dt_date(year, mon, last_day))
+
+        date_str = args.get("date")
+        if date_str:
+            stmt = stmt.where(Transaction.date == _fmt_date(date_str))
+
+        stmt = stmt.order_by(Transaction.date.desc(), Transaction.id.desc())
+        transactions = db.exec(stmt).all()
+
+        if not transactions:
+            return "No matching transactions found for that description."
+
+        limit = args.get("limit")
+        if limit:
+            transactions = transactions[:int(limit)]
+
+        MAX_CANDIDATES = 10
+        if len(transactions) > MAX_CANDIDATES:
+            return (
+                f"Found {len(transactions)} matching transactions — too many to list safely. "
+                f"Please narrow it down with a date, month, or a smaller time range (e.g. "
+                f"'delete my Utilities transaction today' or 'this month')."
+            )
+
+        candidates = []
+        lines = []
+        for i, txn in enumerate(transactions, 1):
+            desc = f"₹{txn.amount:,.0f} {txn.category.title()} on {txn.date}"
+            if txn.note:
+                desc += f" — {txn.note}"
+            candidates.append({"txn_id": txn.id, "description": desc, "fields": {}})
+            lines.append(f"{i}. {desc}")
 
         session.state.set_candidates(candidates, action_type="delete")
-        lines = [f"{i}. {c['description']}" for i, c in enumerate(candidates, 1)]
-        return "Staged for deletion. Show this list to user exactly:\n" + "\n".join(lines) + "\nAsk user to reply with a number."
+        return "\n".join(lines) + "\n\nReply with a number to select which one to delete."
 
     except Exception as e:
         return f"Error staging delete: {str(e)}"
 
 
 def stage_update(args: dict, session) -> str:
-    """Stage transactions for update — stores field changes in candidates."""
+    """Look up matching transactions AND stage the field changes in one call.
+    Merges the old view_transactions -> stage_update two-step into one."""
     try:
-        latest_step = session.state._step_counter
-        if not session.state.has_step(latest_step):
-            return "No transactions staged. Please call view_transactions first."
+        db = session.db_session
+        stmt = select(Transaction).where(Transaction.user_id == session.user_id)
 
-        step_output = session.state.get_step_output(latest_step)
-        candidates = step_output["data"]["transactions"]
+        txn_type = args.get("type") or args.get("type_")
+        if txn_type:
+            stmt = stmt.where(Transaction.type == txn_type)
 
-        if not candidates:
-            return "No matching transactions found."
+        category = args.get("category")
+        if category:
+            stmt = stmt.where(Transaction.category == category)
 
-        update_fields = {k: v for k, v in args.items() if k != "step_id" and v is not None}
-        for c in candidates:
-            c["fields"] = update_fields
+        month = args.get("month")
+        if month:
+            year, mon = map(int, month.split("-"))
+            from calendar import monthrange
+            last_day = monthrange(year, mon)[1]
+            stmt = stmt.where(Transaction.date >= dt_date(year, mon, 1),
+                                Transaction.date <= dt_date(year, mon, last_day))
+
+        date_str = args.get("date")
+        if date_str:
+            stmt = stmt.where(Transaction.date == _fmt_date(date_str))
+
+        stmt = stmt.order_by(Transaction.date.desc(), Transaction.id.desc())
+        transactions = db.exec(stmt).all()
+
+        if not transactions:
+            return "No matching transactions found for that description."
+
+        limit = args.get("limit")
+        if limit:
+            transactions = transactions[:int(limit)]
+
+        # new field values to apply once a candidate is picked & confirmed
+        update_fields = {}
+        if args.get("new_amount") is not None:
+            update_fields["amount"] = args["new_amount"]
+        if args.get("new_category") is not None:
+            update_fields["category"] = args["new_category"]
+        if args.get("new_date") is not None:
+            update_fields["date"] = args["new_date"]
+        if args.get("new_note") is not None:
+            update_fields["note"] = args["new_note"]
+
+        if not update_fields:
+            return "No new field values provided — specify what to change (amount, category, date, or note)."
+
+        candidates = []
+        lines = []
+        for i, txn in enumerate(transactions, 1):
+            desc = f"₹{txn.amount:,.0f} {txn.category.title()} on {txn.date}"
+            if txn.note:
+                desc += f" — {txn.note}"
+            candidates.append({"txn_id": txn.id, "description": desc, "fields": dict(update_fields)})
+            lines.append(f"{i}. {desc}")
 
         session.state.set_candidates(candidates, action_type="update")
-        lines = [f"{i}. {c['description']}" for i, c in enumerate(candidates, 1)]
-        return "Staged for update. Show this list to user exactly:\n" + "\n".join(lines) + "\nAsk user to reply with a number."
+        changes = ", ".join(f"{k} → {v}" for k, v in update_fields.items())
+        return f"Changes to apply: {changes}\n\n" + "\n".join(lines) + "\n\nReply with a number to select which one to update."
 
     except Exception as e:
         return f"Error staging update: {str(e)}"
+
+

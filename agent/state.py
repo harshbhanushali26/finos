@@ -116,6 +116,21 @@ class DependencyState:
         ]
         self.mode = "await_select"
 
+    def set_pending_direct(self, action: Dict):
+        """Set a pending action directly, bypassing candidate selection.
+        Used for single yes/no confirmations that don't involve picking
+        from a list — e.g. 'create this new category?'.
+
+        Args:
+            action: Dict describing the pending action — must include
+                    'action_type' plus whatever fields _execute_pending
+                    needs to carry it out.
+        """
+        self.pending_action = action
+        self.candidates = []
+        self.mode = "await_confirm"
+
+
     def select(self, number: int) -> Optional[Dict]:
         """User picked a number — resolve to pending action.
 

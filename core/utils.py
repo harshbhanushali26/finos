@@ -27,3 +27,12 @@ def get_last_n_months(n: int) -> list[str]:
             y -= 1
         months.append(f"{y:04d}-{m:02d}")
     return list(reversed(months))
+
+
+def month_range(month: str) -> tuple[dt_date, dt_date]:
+    """Return (first_day, last_day) date objects for a 'YYYY-MM' string.
+    Consolidates the identical function previously duplicated in
+    tools/analytics.py, tools/budget.py, and agent/insights.py."""
+    year, mon = map(int, month.split("-"))
+    last_day = monthrange(year, mon)[1]
+    return dt_date(year, mon, 1), dt_date(year, mon, last_day)

@@ -16,7 +16,7 @@ from typing import Optional
 import bcrypt
 from sqlmodel import Session, select
 
-from config import TOKEN_EXPIRE_DAYS
+from config import SESSION_EXPIRE_HOURS
 from core.models import Session as AuthSession, User
 
 
@@ -41,7 +41,8 @@ def create_token(user_id: int, db: Session) -> str:
     """
 
     token = secrets.token_hex(32)   # 64-char hex string
-    auth_session = AuthSession(user_id=user_id, token=token)
+    expires = datetime.now(UTC) + timedelta(hours=SESSION_EXPIRE_HOURS)
+    auth_session = AuthSession(user_id=user_id, token=token, expires_at=expires)
     db.add(auth_session)
     db.commit()
     db.refresh(auth_session)
@@ -61,12 +62,24 @@ def get_user_by_token(token: str, db: Session) -> Optional[User]:
     if not auth_session:
         return None
 
-    # Check expiry — compare naive datetimes consistently
-    expiry = auth_session.created_at + timedelta(days=TOKEN_EXPIRE_DAYS)
-    if datetime.now(UTC) > expiry.replace(tzinfo=UTC):
+    # No expires_at means a pre-migration session (or corrupted row) — reject
+    if auth_session.expires_at is None:
         db.delete(auth_session)
         db.commit()
         return None
+
+    now = datetime.now(UTC)
+    expiry = auth_session.expires_at.replace(tzinfo=UTC) if auth_session.expires_at.tzinfo is None else auth_session.expires_at
+
+    if now > expiry:
+        db.delete(auth_session)
+        db.commit()
+        return None
+
+    # Sliding expiry — extend on every valid, authenticated request
+    auth_session.expires_at = now + timedelta(hours=SESSION_EXPIRE_HOURS)
+    db.add(auth_session)
+    db.commit()
 
     return db.get(User, auth_session.user_id)
 

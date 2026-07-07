@@ -8,7 +8,6 @@ GET /analytics/chart/line   — time-series data for line chart
 GET /analytics/chart/bar    — per-day or per-month totals for bar chart
 """
 
-
 from calendar import monthrange
 from collections import defaultdict
 from datetime import timedelta, date as dt_date
@@ -20,14 +19,49 @@ from sqlmodel import Session, select, func
 from api.deps import get_current_user, get_db
 from api.schemas import BreakdownItem, ChartPoint, SummaryResponse
 from core.models import Transaction, User, Budget
-from core.utils import get_last_n_months, current_month_range
+from core.utils import get_last_n_months, current_month_range, month_range
+from core.shared_analytics import sum_by_type
 
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
-
 # ── Health-Score ────────────────────────────────────────────────────────────────
+
+
+@router.get("/calendar")
+def calendar_data(
+    month: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Per-day net total and transaction count for a given month.
+    Returns { "2026-07-01": {"net": 120.5, "count": 3}, ... } for every
+    day in the month (days with no transactions are included with 0/0).
+    """
+    start, end, _ = _get_date_range("monthly", month, None)
+    txns = _fetch_transactions(current_user.id, start, end, "both", db)
+
+    by_date: dict[dt_date, dict] = defaultdict(lambda: {"net": 0.0, "count": 0})
+    for t in txns:
+        sign = 1 if t.type == "income" else -1
+        by_date[t.date]["net"] += sign * t.amount
+        by_date[t.date]["count"] += 1
+
+    result = {}
+    current = start
+    while current <= end:
+        data = by_date[current]
+        result[current.isoformat()] = {
+            "net": round(data["net"], 2),
+            "count": data["count"],
+        }
+        current += timedelta(days=1)
+
+    return result
+
+
 
 @router.get("/health-score")
 def get_health_score(
@@ -36,24 +70,11 @@ def get_health_score(
 ):
     cm_start, cm_end = current_month_range()
 
-    def _sum(txn_type: str, start, end) -> float:
-        result = db.exec(
-            select(func.sum(Transaction.amount)).where(
-                Transaction.user_id == user.id,
-                Transaction.type == txn_type,
-                Transaction.date >= start,
-                Transaction.date <= end,
-            )
-        ).one()
-        return float(result or 0)
+    current_income = sum_by_type(db, user.id, "income", cm_start, cm_end)
+    current_expense = sum_by_type(db, user.id, "expense", cm_start, cm_end)
 
-    current_income = _sum("income", cm_start, cm_end)
-    current_expense = _sum("expense", cm_start, cm_end)
-
-    # ── 1. Savings rate ──
     savings_rate = round((current_income - current_expense) / current_income * 100, 1) if current_income > 0 else None
 
-    # ── 2. Budget adherence (budgeted categories only) ──
     budgets = db.exec(select(Budget).where(Budget.user_id == user.id)).all()
     if budgets:
         total_limit = sum(b.monthly_limit for b in budgets)
@@ -73,21 +94,19 @@ def get_health_score(
     else:
         budget_adherence = None
 
-    # ── 3 & 4. Income stability + expense growth (adaptive on available history) ──
-    past_months = get_last_n_months(3)  # oldest -> newest, excludes current month
+    past_months = get_last_n_months(3)
     months_available = 0
     past_incomes = []
     past_expenses = []
     for m in past_months:
         date_start, date_end, _ = _get_date_range("monthly", m, None)
-        inc = _sum("income", date_start, date_end)
-        exp = _sum("expense", date_start, date_end)
+        inc = sum_by_type(db, user.id, "income", date_start, date_end)
+        exp = sum_by_type(db, user.id, "expense", date_start, date_end)
         if inc > 0 or exp > 0:
             months_available += 1
         past_incomes.append(inc)
         past_expenses.append(exp)
 
-    # most recent past month is last in the list
     prev_month_income = past_incomes[-1] if past_incomes else 0
     prev_month_expense = past_expenses[-1] if past_expenses else 0
 
@@ -95,10 +114,8 @@ def get_health_score(
     expense_growth = None
 
     if months_available >= 1:
-        # expense growth: always vs immediately preceding month
         expense_growth = round(current_expense / prev_month_expense * 100, 1) if prev_month_expense > 0 else None
 
-        # income stability: average of however many past months are available (1-3)
         available_incomes = [i for i in past_incomes if i > 0]
         if available_incomes:
             avg_income = sum(available_incomes) / len(available_incomes)
@@ -124,36 +141,21 @@ def get_forecast(
 
     monthly_totals = []
     for m in past_months:
-        date_start, date_end, _ =_get_date_range("monthly", m, None)
-        result = db.exec(
-            select(func.sum(Transaction.amount)).where(
-                Transaction.user_id == user.id,
-                Transaction.type == "expense",
-                Transaction.date >= date_start,
-                Transaction.date <= date_end,
-            )
-        ).one()
-        monthly_totals.append({"month": m, "total": float(result or 0)})
+        date_start, date_end, _ = _get_date_range("monthly", m, None)
+        total = sum_by_type(db, user.id, "expense", date_start, date_end)
+        monthly_totals.append({"month": m, "total": total})
 
     valid = [m["total"] for m in monthly_totals if m["total"] > 0]
     forecast = round(sum(valid) / len(valid), 2) if valid else 0.0
 
     cm_start, cm_end = current_month_range()
-    current_result = db.exec(
-        select(func.sum(Transaction.amount)).where(
-            Transaction.user_id == user.id,
-            Transaction.type == "expense",
-            Transaction.date >= cm_start,
-            Transaction.date <= cm_end,
-        )
-    ).one()
+    current_spend = sum_by_type(db, user.id, "expense", cm_start, cm_end)
 
     return {
         "forecast": forecast,
         "based_on_months": monthly_totals,
-        "current_month_spend_so_far": float(current_result or 0),
+        "current_month_spend_so_far": current_spend,
     }
-
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -162,16 +164,11 @@ def _get_date_range(period: str, month: Optional[str], year: Optional[int]):
     """
     Resolve period string to (start_date, end_date, period_label).
     period: "weekly" | "monthly" | "yearly"
-    month:  "2026-06" (used when period=monthly)
-    year:   2026      (used when period=yearly)
     """
-
     today = dt_date.today()
 
     if period == "weekly":
-
-        # Current week: Monday to Sunday
-        start =  today - timedelta(days=today.weekday())
+        start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=6)
         return start, end, f"{start.isoformat()} / {end.isoformat()}"
 
@@ -181,12 +178,12 @@ def _get_date_range(period: str, month: Optional[str], year: Optional[int]):
                 y, m = int(month.split("-")[0]), int(month.split("-")[1])
             except (ValueError, IndexError):
                 raise HTTPException(status_code=422, detail="month must be YYYY-MM")
-
         else:
             y, m = today.year, today.month
 
-        last = monthrange(y, m)[1]
-        return dt_date(y, m, 1), dt_date(y, m, last), f"{y}-{m:02d}"
+        month_str = f"{y}-{m:02d}"
+        start, end = month_range(month_str)
+        return start, end, month_str
 
     elif period == "yearly":
         y = int(year) if year else today.year
@@ -197,7 +194,7 @@ def _get_date_range(period: str, month: Optional[str], year: Optional[int]):
 
 
 def _fetch_transactions(
-    user_id: int, 
+    user_id: int,
     start: dt_date,
     end: dt_date,
     type_filter: Optional[str],
@@ -225,7 +222,6 @@ def summary(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-
     start, end, label = _get_date_range(period, month, year)
     txns = _fetch_transactions(current_user.id, start, end, "both", db)
 
@@ -249,7 +245,6 @@ def breakdown(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-
     start, end, _ = _get_date_range(period, month, year)
     txns = _fetch_transactions(current_user.id, start, end, type, db)
 
@@ -292,7 +287,6 @@ def chart_line(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-
     return _build_chart_data(current_user.id, period, month, year, db)
 
 
@@ -304,7 +298,6 @@ def chart_bar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-
     return _build_chart_data(current_user.id, period, month, year, db)
 
 
@@ -314,19 +307,11 @@ def _build_chart_data(
     month: Optional[str],
     year: Optional[int],
     db: Session,
-    ) -> list[ChartPoint]:
-
-    """
-    Build time-series chart data.
-    Weekly  → 7 points, one per day (Mon–Sun), label = "Mon", "Tue" ...
-    Monthly → one per day of month, label = "01", "02" ...
-    Yearly  → 12 points, one per month, label = "Jan", "Feb" ...
-    """
+) -> list[ChartPoint]:
 
     start, end, _ = _get_date_range(period, month, year)
     txns = _fetch_transactions(user_id, start, end, "both", db)
 
-    # Group transactions by date
     by_date: dict[dt_date, dict] = defaultdict(lambda: {"income": 0.0, "expense": 0.0})
     for t in txns:
         by_date[t.date][t.type] += t.amount
@@ -372,5 +357,3 @@ def _build_chart_data(
             ))
 
     return points
-
-

@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>FinOS — Personal Finance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.10.0/dist/tabler-icons.min.css" />
+  <link rel="stylesheet" href="style.css" />
+  <script>(function () { document.documentElement.className = localStorage.getItem('finos-theme') || 'dark' })();</script>
+</head>
+
+<body>
+
+  <!-- ══ AUTH SCREEN ══ -->
+  <div class="auth-screen" id="authScreen">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="logo-icon"><i class="ti ti-chart-arrows-vertical"></i></div>
+        <div>
+          <div class="auth-logo-name">FinOS</div>
+          <div class="auth-logo-sub">Personal Finance Platform</div>
+        </div>
+      </div>
+
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tabLogin" onclick="switchAuthTab('login')">Login</button>
+        <button class="auth-tab" id="tabSignup" onclick="switchAuthTab('signup')">Sign Up</button>
+      </div>
+
+      <!-- Login form -->
+      <div id="formLogin">
+        <div class="fgroup">
+          <label class="flabel">Username</label>
+          <input type="text" id="loginUser" class="finput" placeholder="Enter username" autocomplete="username" />
+        </div>
+        <div class="fgroup" style="position:relative">
+          <label class="flabel">Password</label>
+          <input type="password" id="loginPass" class="finput" placeholder="Enter password"
+            autocomplete="current-password" onkeydown="if(event.key==='Enter')login()" />
+          <button class="pw-toggle" onclick="togglePw('loginPass',this)" tabindex="-1"><i
+              class="ti ti-eye"></i></button>
+        </div>
+        <div class="auth-err" id="loginErr"></div>
+        <div class="auth-forgot">
+          <a onclick="showToast('Contact your administrator to reset your password')">Forgot password?</a>
+        </div>
+        <button class="btn-primary" onclick="login()" id="loginBtn">
+          <i class="ti ti-login"></i> Login
+        </button>
+      </div>
+
+      <!-- Signup form -->
+      <div id="formSignup" style="display:none">
+        <div class="fgroup">
+          <label class="flabel">Username</label>
+          <input type="text" id="signupUser" class="finput" placeholder="Choose a username" autocomplete="username" />
+        </div>
+        <div class="fgroup" style="position:relative">
+          <label class="flabel">Password</label>
+          <input type="password" id="signupPass" class="finput" placeholder="Choose a password"
+            autocomplete="new-password"
+            oninput="updatePwStrength('signupPass','signupPwFill','signupPwLabel','signupPwStrength')" />
+          <button class="pw-toggle" onclick="togglePw('signupPass',this)" tabindex="-1"><i
+              class="ti ti-eye"></i></button>
+        </div>
+        <div class="pw-strength" id="signupPwStrength" style="display:none">
+          <div class="pw-strength-track">
+            <div class="pw-strength-fill" id="signupPwFill"></div>
+          </div>
+          <span class="pw-strength-label" id="signupPwLabel"></span>
+        </div>
+        <div class="fgroup" style="position:relative">
+          <label class="flabel">Confirm Password</label>
+          <input type="password" id="signupConfirm" class="finput" placeholder="Repeat password"
+            autocomplete="new-password" onkeydown="if(event.key==='Enter')signup()" />
+          <button class="pw-toggle" onclick="togglePw('signupConfirm',this)" tabindex="-1"><i
+              class="ti ti-eye"></i></button>
+        </div>
+        <div class="auth-err" id="signupErr"></div>
+        <button class="btn-primary" onclick="signup()" id="signupBtn">
+          <i class="ti ti-user-plus"></i> Create Account
+        </button>
+      </div>
+
+      <div class="auth-footer">FinOS · Your money, understood.</div>
+    </div>
+  </div>
+
+  <div class="app" id="appShell" style="display:none">
+
+    <!-- ══ SIDEBAR ══ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sb-logo">
+        <div class="logo-icon"><i class="ti ti-chart-arrows-vertical"></i></div>
+        <div>
+          <div class="logo-name">FinOS</div>
+          <div class="logo-sub">Personal Finance</div>
+        </div>
+      </div>
+
+      <nav class="sb-nav">
+        <div class="nav-sec">Overview</div>
+        <button class="nav-item active" onclick="go('dashboard',this)">
+          <i class="ti ti-layout-dashboard nav-icon"></i>
+          <span class="nav-label">Dashboard</span>
+        </button>
+
+        <div class="nav-sec">Money</div>
+        <button class="nav-item" onclick="go('add',this)">
+          <i class="ti ti-plus nav-icon"></i>
+          <span class="nav-label">Add Transaction</span>
+        </button>
+        <button class="nav-item" onclick="go('transactions',this)">
+          <i class="ti ti-list-details nav-icon"></i>
+          <span class="nav-label">Transactions</span>
+        </button>
+        <button class="nav-item" onclick="go('budget',this)">
+          <i class="ti ti-target nav-icon"></i>
+          <span class="nav-label">Budget</span>
+        </button>
+        <button class="nav-item" onclick="go('manage',this)">
+          <i class="ti ti-adjustments nav-icon"></i>
+          <span class="nav-label">Manage</span>
+        </button>
+
+        <div class="nav-sec">Data</div>
+        <button class="nav-item" onclick="go('export',this)">
+          <i class="ti ti-download nav-icon"></i>
+          <span class="nav-label">Export</span>
+        </button>
+        <button class="nav-item" onclick="go('settings',this)">
+          <i class="ti ti-settings nav-icon"></i>
+          <span class="nav-label">Settings</span>
+        </button>
+      </nav>
+
+      <div class="sb-bottom">
+        <button class="ai-btn" onclick="toggleChat()">
+          <i class="ti ti-sparkles nav-icon"></i>
+          <span class="nav-label">AI Assistant</span>
+        </button>
+        <div class="sb-user" onclick="go('settings',document.querySelector('[onclick*=settings]'))">
+          <div class="user-av" id="userAv">?</div>
+          <div>
+            <div class="user-name" id="userName">—</div>
+            <div class="user-role">Member</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="sb-toggle" onclick="toggleSidebar()">
+        <i class="ti ti-chevron-left" id="sbChevron"></i>
+      </button>
+    </aside>
+
+    <!-- ══ MAIN ══ -->
+    <div class="main">
+
+      <!-- topbar -->
+      <header class="topbar">
+        <div class="topbar-l">
+          <h1 class="page-title" id="pageTitle">Dashboard</h1>
+          <div class="period-tabs" id="periodTabs">
+            <button class="ptab" onclick="setPeriod('weekly',this)">Week</button>
+            <button class="ptab active" onclick="setPeriod('monthly',this)">Month</button>
+            <button class="ptab" onclick="setPeriod('yearly',this)">Year</button>
+          </div>
+        </div>
+        <div class="topbar-r">
+          <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme">
+            <i class="ti ti-sun" id="iconSun"></i>
+            <i class="ti ti-moon" id="iconMoon" style="display:none"></i>
+          </button>
+          <button class="btn-add" onclick="go('add',document.getElementById('nav-add'))">
+            <i class="ti ti-plus"></i> Add Transaction
+          </button>
+        </div>
+      </header>
+
+      <!-- pages -->
+      <div class="pages">
+
+        <!-- ══ DASHBOARD (Overview / Analytics) ══ -->
+        <div class="page active" id="page-dashboard">
+
+          <div class="subtabs" id="dashSubtabs">
+            <button class="subtab active" onclick="switchDashView('overview',this)"><i class="ti ti-layout-dashboard"></i> Overview</button>
+            <button class="subtab" onclick="switchDashView('analytics',this)"><i class="ti ti-chart-bar"></i> Analytics</button>
+          </div>
+
+          <!-- ── OVERVIEW ── -->
+          <div class="dash-view active" id="dashview-overview">
+
+            <!-- metric cards -->
+            <div class="metrics">
+              <div class="mcard bal">
+                <i class="ti ti-scale mcard-bg-icon"></i>
+                <div class="mcard-badge up"><i class="ti ti-trending-up"></i> <span id="badgeBalance">—</span></div>
+                <div class="mcard-label">Total Balance</div>
+                <div class="mcard-val" id="metricBalance">—</div>
+                <div class="mcard-sub">all time · net position</div>
+              </div>
+              <div class="mcard inc">
+                <i class="ti ti-cash mcard-bg-icon"></i>
+                <div class="mcard-badge up"><i class="ti ti-trending-up"></i> Income</div>
+                <div class="mcard-label">Total Income</div>
+                <div class="mcard-val" id="metricIncome">—</div>
+                <div class="mcard-sub" id="metricIncomeSub">this week</div>
+              </div>
+              <div class="mcard exp">
+                <i class="ti ti-receipt mcard-bg-icon"></i>
+                <div class="mcard-badge down"><i class="ti ti-trending-down"></i> Expenses</div>
+                <div class="mcard-label">Total Expenses</div>
+                <div class="mcard-val" id="metricExpense">—</div>
+                <div class="mcard-sub" id="metricExpenseSub">this week</div>
+              </div>
+              <div class="mcard today">
+                <i class="ti ti-calendar-today mcard-bg-icon"></i>
+                <div class="mcard-badge up"><i class="ti ti-sun"></i> Today</div>
+                <div class="mcard-label">Today's Net</div>
+                <div class="mcard-val" id="metricToday">—</div>
+                <div class="mcard-sub">income − expenses</div>
+              </div>
+            </div>
+
+            <!-- trend chart + mini calendar -->
+            <div class="dash-main">
+              <div class="chart-card">
+                <div class="chart-hd">
+                  <div class="chart-hd-l">
+                    <div class="chart-ttl">Cash Flow Trend</div>
+                    <div class="chart-sub">Visualization of net volume over time</div>
+                  </div>
+                  <div class="type-pills">
+                    <button class="tpill active" onclick="setChartType('line','both',this)">Both</button>
+                    <button class="tpill" onclick="setChartType('line','income',this)">Income</button>
+                    <button class="tpill" onclick="setChartType('line','expense',this)">Expense</button>
+                  </div>
+                </div>
+                <div class="chart-body">
+                  <canvas id="chartLine"></canvas>
+                </div>
+              </div>
+
+              <div class="budget-mini" style="margin-bottom:0">
+                <div class="sec-hd" style="margin-bottom:10px">
+                  <div>
+                    <div class="sec-ttl" style="font-size:13px" id="miniCalMonthLabel">—</div>
+                  </div>
+                  <div style="display:flex;gap:4px">
+                    <button class="icon-btn-sm" onclick="changeCalMonth(-1)"><i class="ti ti-chevron-left"></i></button>
+                    <button class="icon-btn-sm" onclick="changeCalMonth(1)"><i class="ti ti-chevron-right"></i></button>
+                  </div>
+                </div>
+                <div class="mini-cal-weekdays">
+                  <div>M</div><div>T</div><div>W</div><div>T</div><div>F</div><div>S</div><div>S</div>
+                </div>
+                <div id="miniCalGrid" class="mini-cal-grid">
+                  <div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--t3);font-size:11px">Loading…</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- recent transactions (reactive to calendar clicks) + budget mini -->
+            <div class="dash-bottom">
+              <div class="sec-card" style="margin-bottom:0" id="recentTxnsCard">
+                <div class="sec-hd">
+                  <div>
+                    <div class="sec-ttl" id="recentTxnsTitle">Recent Transactions</div>
+                    <div class="sec-sub" id="recentTxnsSub">Latest income and expenses</div>
+                  </div>
+                  <div id="recentTxnsActions">
+                    <button class="link-btn"
+                      onclick="go('transactions',document.querySelector('[onclick*=transactions]'))">View All</button>
+                  </div>
+                </div>
+                <div class="tbl-wrap">
+                  <table class="dtable">
+                    <thead>
+                      <tr>
+                        <th>Description</th>
+                        <th>Category</th>
+                        <th>Date</th>
+                        <th class="col-r">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recentBody">
+                      <tr>
+                        <td colspan="4" class="tbl-empty">Loading…</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="budget-mini" style="margin-bottom:0">
+                <div class="sec-hd" style="margin-bottom:12px">
+                  <div>
+                    <div class="sec-ttl" style="font-size:13px">Budget Overview</div>
+                    <div style="font-size:11px;color:var(--t3)">this month</div>
+                  </div>
+                  <button class="link-btn" onclick="go('budget',document.querySelector('[onclick*=budget]'))">See
+                    All</button>
+                </div>
+                <div id="budgetMiniList">
+                  <div style="font-size:12px;color:var(--t3)">Loading…</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── ANALYTICS ── -->
+          <div class="dash-view" id="dashview-analytics">
+
+            <div style="font-size:11px;color:var(--t3);margin:0 0 8px 2px">Forecast, health score & insights are
+              monthly — independent of the week/month/year filter above</div>
+
+            <!-- forecast -->
+            <div class="forecast-card">
+              <div class="forecast-icon"><i class="ti ti-chart-arrows-vertical"></i></div>
+              <div class="forecast-body">
+                <div class="forecast-label">Projected Spend This Month</div>
+                <div class="forecast-val" id="forecastVal">—</div>
+                <div class="forecast-sub" id="forecastSub">based on last 3 months</div>
+              </div>
+              <div class="forecast-progress">
+                <div class="forecast-progress-track">
+                  <div class="forecast-progress-fill" id="forecastFill"></div>
+                </div>
+                <div class="forecast-progress-lbl" id="forecastProgressLbl">—</div>
+              </div>
+            </div>
+
+            <!-- health score -->
+            <div class="health-grid">
+              <div class="health-card" id="hsSavings">
+                <div class="health-label">Savings Rate</div>
+                <div class="health-val">—</div>
+                <div class="health-bar">
+                  <div class="health-bar-fill"></div>
+                </div>
+              </div>
+              <div class="health-card" id="hsBudget">
+                <div class="health-label">Budget Adherence</div>
+                <div class="health-val">—</div>
+                <div class="health-bar">
+                  <div class="health-bar-fill"></div>
+                </div>
+              </div>
+              <div class="health-card" id="hsIncome">
+                <div class="health-label">Income Stability</div>
+                <div class="health-val">—</div>
+                <div class="health-bar">
+                  <div class="health-bar-fill"></div>
+                </div>
+              </div>
+              <div class="health-card" id="hsGrowth">
+                <div class="health-label">Expense Growth</div>
+                <div class="health-val">—</div>
+                <div class="health-bar">
+                  <div class="health-bar-fill"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- insights -->
+            <div class="sec-card" id="insightsSection" style="margin-bottom:14px">
+              <div class="sec-hd">
+                <div>
+                  <div class="sec-ttl">Smart Insights</div>
+                  <div class="sec-sub">Patterns detected this month</div>
+                </div>
+              </div>
+              <div id="insightsList" class="insights-grid">
+                <div style="font-size:12px;color:var(--t3)">Loading…</div>
+              </div>
+            </div>
+
+            <!-- period breakdown bar chart + category donut -->
+            <div class="dash-bottom">
+              <div class="chart-card" style="margin-bottom:0">
+                <div class="chart-hd">
+                  <div class="chart-hd-l">
+                    <div class="chart-ttl">Period Breakdown</div>
+                    <div class="chart-sub" id="barChartSub">Each bar = one day this week</div>
+                  </div>
+                  <div class="type-pills">
+                    <button class="tpill active" onclick="setChartType('bar','both',this)">Both</button>
+                    <button class="tpill" onclick="setChartType('bar','income',this)">Income</button>
+                    <button class="tpill" onclick="setChartType('bar','expense',this)">Expense</button>
+                  </div>
+                </div>
+                <div class="chart-body">
+                  <canvas id="chartBar"></canvas>
+                </div>
+              </div>
+
+              <div class="sec-card" style="margin-bottom:0">
+                <div class="sec-hd">
+                  <div>
+                    <div class="sec-ttl">Category Breakdown</div>
+                    <div style="font-size:11px;color:var(--t3)" id="donutScope">this week</div>
+                  </div>
+                  <div class="type-pills" style="scale:.9;transform-origin:right">
+                    <button class="tpill active" onclick="setChartType('donut','expense',this)">Exp</button>
+                    <button class="tpill" onclick="setChartType('donut','income',this)">Inc</button>
+                  </div>
+                </div>
+                <div class="donut-wrap">
+                  <canvas id="chartDonut"></canvas>
+                  <div class="donut-center">
+                    <span class="donut-val" id="donutTotal">—</span>
+                    <span class="donut-lbl">Total Spend</span>
+                  </div>
+                </div>
+                <div id="donutLegend" style="margin-top:14px;display:flex;flex-direction:column;gap:8px"></div>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /page-dashboard -->
+
+        <!-- ══ ADD TRANSACTION ══ -->
+        <div class="page" id="page-add">
+          <div class="form-wrap">
+            <div class="form-card">
+              <div class="form-title">New Transaction</div>
+              <div class="form-hint">Record your income or expense instantly</div>
+              <div class="fgroup">
+                <label class="flabel">Amount</label>
+                <div class="famount-wrap">
+                  <span class="fcur">₹</span>
+                  <input type="number" id="addAmount" class="finput famount" placeholder="0.00" min="0" step="0.01" />
+                </div>
+              </div>
+              <div class="frow">
+                <div class="fgroup">
+                  <label class="flabel">Type</label>
+                  <div class="type-sel">
+                    <button class="tsel-pill active" data-val="expense" onclick="selType('expense',this)"><i
+                        class="ti ti-trending-down"></i> Expense</button>
+                    <button class="tsel-pill" data-val="income" onclick="selType('income',this)"><i
+                        class="ti ti-trending-up"></i> Income</button>
+                  </div>
+                </div>
+                <div class="fgroup">
+                  <label class="flabel">Date</label>
+                  <input type="date" id="addDate" class="finput" />
+                </div>
+              </div>
+              <div class="fgroup">
+                <label class="flabel">Category</label>
+                <select id="addCategory" class="finput fselect">
+                  <option value="">Select category…</option>
+                </select>
+              </div>
+              <div class="fgroup">
+                <label class="flabel">Payment Method
+                  <span
+                    style="color:var(--t3);text-transform:none;letter-spacing:0;font-weight:400">(optional)</span>
+                </label>
+                <select id="addPaymentMethod" class="finput fselect">
+                  <option value="">Select payment method…</option>
+                </select>
+              </div>
+              <div class="fgroup">
+                <label class="flabel">Note <span
+                    style="color:var(--t3);text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+                <input type="text" id="addNote" class="finput" placeholder="What was this for?" />
+              </div>
+              <button class="btn-primary" onclick="submitTxn()"><i class="ti ti-plus"></i> Add Transaction</button>
+              <div class="ffeedback" id="addFb"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ TRANSACTIONS ══ -->
+        <div class="page" id="page-transactions">
+          <div class="filter-bar">
+            <select class="f-select" id="filterType" onchange="loadTxns()">
+              <option value="">All Types</option>
+              <option value="income">Income</option>
+              <option value="expense">Expense</option>
+            </select>
+            <input type="text" class="f-date" id="filterCat" placeholder="Category…" oninput="loadTxns()"
+              style="border-radius:99px;padding:7px 14px" />
+            <input type="date" class="f-date" id="filterFrom" onchange="loadTxns()" />
+            <span class="f-sep">to</span>
+            <input type="date" class="f-date" id="filterTo" onchange="loadTxns()"/>
+          <select class="f-select" id="filterPaymentMethod" onchange="loadTxns()">
+            <option value="">All Payment Methods</option>
+          </select>
+          <button class="f-clear" onclick="clearFilters()"><i class="ti ti-x"></i> Clear</button>
+          </div>
+          <div class="sec-card">
+            <div class="tbl-wrap">
+              <table class="dtable">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Category</th>
+                    <th>Type</th>
+                    <th>Payment</th>
+                    <th>Note</th>
+                    <th class="col-r">Amount</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="txnBody">
+                  <tr>
+                    <td colspan="6" class="tbl-empty">Loading…</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination" id="txnPagination"></div>
+          </div>
+        </div>
+
+        <!-- ══ BUDGET ══ -->
+        <div class="page" id="page-budget">
+          <div class="budget-hero">
+            <div class="bh-label">Total Monthly Budget</div>
+            <div class="bh-amount" id="bhAmount">₹0.00</div>
+            <div class="bh-bar-track">
+              <div class="bh-bar-fill" id="bhBarFill" style="width:0%"></div>
+            </div>
+            <div class="bh-meta">
+              <span id="bhRemaining">Set budgets below to get started</span>
+              <span class="bh-pct" id="bhPct">0% Used</span>
+            </div>
+          </div>
+          <div
+            style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:13px;font-weight:600;color:var(--t2)">Monthly Income:</span>
+              <div class="famount-wrap" style="max-width:180px">
+                <span class="fcur">₹</span>
+                <input type="number" id="incomeInput" class="finput famount" style="height:36px;font-size:13px"
+                  placeholder="0.00" />
+              </div>
+              <button class="btn-sm" onclick="saveIncome()">Save</button>
+              <span id="incomeFb" style="font-size:12px;color:var(--green)"></span>
+            </div>
+            <button class="btn-sm" onclick="openBudgetModal()"><i class="ti ti-plus"></i> Set Budget</button>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <div>
+              <div style="font-size:15px;font-weight:700">Category Limits</div>
+              <div style="font-size:11px;color:var(--t3);margin-top:2px">Track spending against your monthly limits
+              </div>
+            </div>
+          </div>
+          <div class="budget-grid" id="budgetGrid">
+            <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--t3);font-size:13px">Loading…</div>
+          </div>
+          <div id="overspendSection" style="display:none;margin-top:16px">
+            <div class="sec-card" style="border-left:3px solid var(--red)">
+              <div class="sec-hd">
+                <span style="font-size:14px;font-weight:700;color:var(--red);display:flex;align-items:center;gap:6px"><i
+                    class="ti ti-alert-triangle"></i> Over Budget</span>
+              </div>
+              <div id="overspendList"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ MANAGE ══ -->
+        <div class="page" id="page-manage">
+          <div class="settings-grid">
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">Categories</span></div>
+              <div class="frow" style="align-items:flex-end;margin-bottom:14px">
+                <div class="fgroup" style="flex:2">
+                  <label class="flabel">New Category</label>
+                  <input type="text" id="mgCatName" class="finput" placeholder="e.g. Freelance"/>
+                </div>
+                <div class="fgroup" style="flex:1">
+                  <label class="flabel">Type</label>
+                  <select id="mgCatType" class="finput fselect">
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                  </select>
+                </div>
+                <button class="btn-sm" onclick="addManageCategory()" style="margin-bottom:2px">Add</button>
+              </div>
+              <div id="mgCatErr" class="auth-err"></div>
+              <div id="mgCatList"></div>
+            </div>
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">Payment Methods</span></div>
+              <div class="frow" style="align-items:flex-end;margin-bottom:14px">
+                <div class="fgroup" style="flex:2">
+                  <label class="flabel">New Payment Method</label>
+                  <input type="text" id="mgPmName" class="finput" placeholder="e.g. PayPal"/>
+                </div>
+                <button class="btn-sm" onclick="addManagePaymentMethod()" style="margin-bottom:2px">Add</button>
+              </div>
+              <div id="mgPmErr" class="auth-err"></div>
+              <div id="mgPmList"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ EXPORT ══ -->
+        <div class="page" id="page-export">
+          <div class="form-wrap">
+            <div class="form-card">
+              <div class="form-title">Export Data</div>
+              <div class="form-hint">Download your transaction history in your preferred format</div>
+              <div class="frow" style="margin-bottom:20px">
+                <div class="fgroup"><label class="flabel">Month</label><input type="month" id="exportMonth"
+                    class="finput" /></div>
+                <div class="fgroup"><label class="flabel">Year</label><input type="number" id="exportYear"
+                    class="finput" placeholder="2026" min="2000" max="2100" /></div>
+              </div>
+              <div class="export-grid">
+                <button class="exp-btn" onclick="doExport('csv')"><i class="ti ti-file-text"></i><span
+                    class="exp-fmt">CSV</span><span class="exp-desc">Spreadsheet compatible</span></button>
+                <button class="exp-btn" onclick="doExport('json')"><i class="ti ti-braces"></i><span
+                    class="exp-fmt">JSON</span><span class="exp-desc">Raw data</span></button>
+                <button class="exp-btn" onclick="doExport('excel')"><i class="ti ti-table"></i><span
+                    class="exp-fmt">Excel</span><span class="exp-desc">.xlsx format</span></button>
+                <button class="exp-btn exp-disabled"><i class="ti ti-file-type-pdf"></i><span
+                    class="exp-fmt">PDF</span><span class="exp-desc">Coming soon</span></button>
+              </div>
+              <div class="ffeedback" id="exportFb"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ SETTINGS ══ -->
+        <div class="page" id="page-settings">
+          <div class="settings-grid">
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">Appearance</span></div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Theme</div>
+                  <div class="setting-sub">Light or dark mode</div>
+                </div>
+                <button class="toggle-btn" onclick="toggleTheme()"><span id="themeLabel">Dark</span></button>
+              </div>
+            </div>
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">AI Chat</span></div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Clear history</div>
+                  <div class="setting-sub">Wipes session chat</div>
+                </div>
+                <button class="btn-danger" onclick="clearChat()">Clear</button>
+              </div>
+            </div>
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">Change Password</span></div>
+              <div class="fgroup" style="position:relative">
+                <label class="flabel">Current Password</label>
+                <input type="password" id="cpCurrent" class="finput" placeholder="Enter current password"
+                  autocomplete="current-password" />
+                <button class="pw-toggle" onclick="togglePw('cpCurrent',this)" tabindex="-1"><i
+                    class="ti ti-eye"></i></button>
+              </div>
+              <div class="fgroup" style="position:relative">
+                <label class="flabel">New Password</label>
+                <input type="password" id="cpNew" class="finput" placeholder="Choose a new password"
+                  autocomplete="new-password"
+                  oninput="updatePwStrength('cpNew','cpNewFill','cpNewLabel','cpNewStrength')" />
+                <button class="pw-toggle" onclick="togglePw('cpNew',this)" tabindex="-1"><i
+                    class="ti ti-eye"></i></button>
+              </div>
+              <div class="pw-strength" id="cpNewStrength" style="display:none">
+                <div class="pw-strength-track">
+                  <div class="pw-strength-fill" id="cpNewFill"></div>
+                </div>
+                <span class="pw-strength-label" id="cpNewLabel"></span>
+              </div>
+              <div class="fgroup" style="position:relative">
+                <label class="flabel">Confirm New Password</label>
+                <input type="password" id="cpConfirm" class="finput" placeholder="Repeat new password"
+                  autocomplete="new-password" onkeydown="if(event.key==='Enter')changePassword()" />
+                <button class="pw-toggle" onclick="togglePw('cpConfirm',this)" tabindex="-1"><i
+                    class="ti ti-eye"></i></button>
+              </div>
+              <div class="auth-err" id="cpErr"></div>
+              <button class="btn-sm" onclick="changePassword()" id="cpBtn">Update Password</button>
+            </div>
+            <div class="sec-card">
+              <div class="sec-hd"><span class="sec-ttl">About</span></div>
+              <div class="about-block">
+                <div class="about-row"><span>Version</span><span class="mono">v1.0</span></div>
+                <div class="about-row"><span>Currency</span><span class="mono">₹ INR</span></div>
+              </div>
+            </div>
+            <!-- Logout card -->
+            <div class="sec-card" style="border-left:3px solid var(--red)">
+              <div class="sec-hd"><span class="sec-ttl">Account</span></div>
+              <div class="setting-row">
+                <div>
+                  <div class="setting-label">Sign out</div>
+                  <div class="setting-sub">Clears session and returns to login</div>
+                </div>
+                <button class="btn-danger" onclick="logout()"><i class="ti ti-logout"></i> Logout</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /pages -->
+    </div><!-- /main -->
+
+  </div><!-- /app -->
+
+  <!-- ══ FLOATING CHAT ══ -->
+  <div class="chat-window hidden" id="chatWindow">
+    <div class="cw-header">
+      <div class="cw-title-wrap">
+        <div class="cw-dot"></div>
+        <div>
+          <div class="cw-title">FinOS Assistant</div>
+          <div class="cw-subtitle">AI-powered finance insights</div>
+        </div>
+      </div>
+      <div class="cw-controls">
+        <button class="icon-btn-sm" onclick="clearChat()" title="Clear"><i class="ti ti-trash"></i></button>
+        <button class="icon-btn-sm" onclick="toggleChat()" title="Close"><i class="ti ti-x"></i></button>
+      </div>
+    </div>
+    <div class="chat-msgs" id="chatMsgs">
+      <div class="chat-welcome">
+        <div class="welcome-icon"><i class="ti ti-sparkles"></i></div>
+        <div class="welcome-title">Hi <span id="welcomeName">there</span>! 👋</div>
+        <div class="welcome-sub">Ask me anything about your finances. I can analyze spending, add transactions, and give
+          insights.</div>
+        <div class="welcome-chips">
+          <button class="wchip" onclick="sendChip(this)">balance</button>
+          <button class="wchip" onclick="sendChip(this)">show this month's expenses</button>
+          <button class="wchip" onclick="sendChip(this)">top spending categories</button>
+        </div>
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" class="chat-input" placeholder="Ask about your finances…"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}" />
+        <button class="chat-send" onclick="sendMsg()" id="chatSendBtn"><i class="ti ti-send"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ EDIT TXN MODAL ══ -->
+  <div class="modal-ov" id="editModal" onclick="closeModal('editModal',event)">
+    <div class="modal">
+      <div class="modal-hd">
+        <span class="modal-ttl">Edit Transaction</span>
+        <button class="icon-btn-sm" onclick="closeModal('editModal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editId" />
+        <div class="fgroup">
+          <label class="flabel">Amount</label>
+          <div class="famount-wrap"><span class="fcur">₹</span><input type="number" id="editAmount"
+              class="finput famount" min="0" step="0.01" /></div>
+        </div>
+        <div class="frow">
+          <div class="fgroup">
+            <label class="flabel">Type</label>
+            <select id="editType" class="finput fselect" onchange="loadEditCategories(this.value)">
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+            </select>
+          </div>
+          <div class="fgroup"><label class="flabel">Date</label><input type="date" id="editDate" class="finput" /></div>
+        </div>
+        <div class="fgroup"><label class="flabel">Category</label><select id="editCategory"
+            class="finput fselect"></select></div>
+        <div class="fgroup"><label class="flabel">Payment Method</label><select id="editPaymentMethod"
+            class="finput fselect">
+            <option value="">—</option>
+          </select></div>
+        <div class="fgroup"><label class="flabel">Note</label><input type="text" id="editNote" class="finput" /></div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn-danger" onclick="deleteTxn()">Delete</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" onclick="closeModal('editModal')">Cancel</button>
+          <button class="btn-sm" onclick="saveEdit()">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ BUDGET MODAL ══ -->
+  <div class="modal-ov" id="budgetModal" onclick="closeModal('budgetModal',event)">
+    <div class="modal">
+      <div class="modal-hd">
+        <span class="modal-ttl" id="budgetModalTitle">Set Budget</span>
+        <button class="icon-btn-sm" onclick="closeModal('budgetModal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="fgroup"><label class="flabel">Category</label><input type="text" id="budgetCat" class="finput"
+            placeholder="e.g. Food" /></div>
+        <div class="fgroup">
+          <label class="flabel">Monthly Limit</label>
+          <div class="famount-wrap"><span class="fcur">₹</span><input type="number" id="budgetLimit"
+              class="finput famount" placeholder="0.00" min="0" step="0.01" /></div>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <div></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" onclick="closeModal('budgetModal')">Cancel</button>
+          <button class="btn-sm" onclick="saveBudget()">Save Budget</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <!-- Custom confirm modal -->
+  <div class="modal-ov" id="confirmModal" onclick="closeConfirm(false,event)">
+    <div class="modal" style="width:360px">
+      <div class="modal-hd">
+        <span class="modal-ttl" id="confirmTitle">Confirm</span>
+      </div>
+      <div class="modal-body" style="padding:18px 22px 8px">
+        <p id="confirmMsg" style="font-size:13px;color:var(--t2);line-height:1.6"></p>
+      </div>
+      <div class="modal-ft">
+        <div></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" onclick="closeConfirm(false)">Cancel</button>
+          <button id="confirmYesBtn" class="btn-danger" onclick="closeConfirm(true)">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+
+</html>

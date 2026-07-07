@@ -11,7 +11,22 @@ FinOS is not just an expense tracker. It is a full-stack AI finance platform tha
 
 Built by unifying two prior projects — `expense-tracker` (CLI, JSON storage) and `finance-agent` (conversational AI) — into a single web application. This is not a rewrite. The agent logic, pattern matcher, tool schemas, and insights engine from `finance-agent` are carried forward. Only the storage layer (JSON → SQLite) and interface layer (CLI → Web) change.
 
-<!-- demo screenshot or GIF here -->
+
+## 🖥️ Application Preview
+
+### 📊 Main Dashboard
+The central hub displaying real-time cash flow trends, net positions, and recent transaction history.
+
+| Dark Mode | Light Mode |
+|---|---|
+| <img src="assets/Dashboard-dark.png" width="100%"> | <img src="assets/Dashboard-light.png" width="100%"> |
+
+### 🎯 Budget Management
+Advanced tracking to enforce daily quotas, set category-specific targets, and monitor limit thresholds.
+
+| Dark Mode | Light Mode |
+|---|---|
+| <img src="assets/Budget-dark.png" width="100%"> | <img src="assets/Budget-light.png" width="100%"> |
 
 ---
 
@@ -22,6 +37,8 @@ Built by unifying two prior projects — `expense-tracker` (CLI, JSON storage) a
 **Conversational analytics** — ask things like "compare this month vs last month", "where is most of my money going?", or "am I overspending on food?". The agent streams its response word by word.
 
 **Smart pattern matching** — roughly 60% of common queries ("balance", "show this week", "add 250 food") are intercepted before they reach the LLM and answered instantly via regex routing.
+
+**Payment method tracking** — every transaction can be tagged with a payment method (Cash, Card, UPI, etc.), managed the same way as categories: user-defined, deletion blocked while in use, orphan-safe (renaming/deleting a method never breaks historical transactions — they keep the string).
 
 **Budget tracking** — set per-category monthly limits, monitor usage with progress bars, and get toast-alerted when a category crosses 80% of its limit.
 
@@ -36,6 +53,27 @@ Built by unifying two prior projects — `expense-tracker` (CLI, JSON storage) a
 **Export** — download your transaction history as CSV, JSON, or Excel (`.xlsx` with color-coded rows and styled headers).
 
 **Hardened auth** — bcrypt password hashing, enforced username/password policy on both frontend and backend, in-app change-password, and a CLI-based password reset for lockouts (see [Auth & Security](#-auth--security) below).
+
+**Sliding session expiry** — sessions stay alive for 4 hours of *active* use (refreshed on every authenticated request) rather than a hard cutoff, paired with a 30-minute client-side idle timer that signs out an inactive tab regardless of the server-side token's remaining life.
+
+---
+
+## 🖥️ Dashboard
+
+The dashboard is a single destination — **Overview** and **Analytics** are tabs within it, not separate pages, so switching between "what's happening" and "why" never feels like leaving the app.
+
+**Overview** — the at-a-glance view:
+- Four metric cards (Total Balance, Income, Expenses, Today's Net)
+- Cash Flow Trend line chart
+- A compact mini-calendar in the right rail: dots mark days with transaction activity (green for a net-positive day, red for net-negative), no dot for empty days. Clicking a day reactively filters the Recent Transactions list below it in place — no modal, no page change. A "Clear" action returns to the default unfiltered view, and an inline "+ Add" shortcut pre-fills the Add Transaction form with the selected date.
+- Budget Overview mini-widget (top 3 categories vs. limits)
+
+**Analytics** — the deep-dive view:
+- Spending forecast + financial health score grid
+- Smart Insights feed (the 6 pattern detectors)
+- Period Breakdown bar chart + Category Breakdown donut with legend
+
+Both tabs share the same Week/Month/Year period filter in the top bar (defaults to **Month** on load); Analytics' forecast/health/insights section is explicitly month-scoped regardless of that filter, since those metrics are inherently monthly.
 
 ---
 
@@ -54,7 +92,7 @@ Built by unifying two prior projects — `expense-tracker` (CLI, JSON storage) a
 | Charts | Chart.js (CDN) |
 | Icons | Tabler Icons (CDN) |
 | Streaming | Server-Sent Events (SSE) via FastAPI `StreamingResponse` |
-| Auth | bcrypt password hashing, session tokens |
+| Auth | bcrypt password hashing, sliding-expiry session tokens |
 | Export | openpyxl |
 
 ---
@@ -115,17 +153,18 @@ finos/
 │   ├── schemas.py             # request/response Pydantic models
 │   └── routes/
 │       ├── auth.py            # signup, login, me, logout, change-password
-│       ├── transactions.py    # CRUD with filters
+│       ├── transactions.py    # CRUD with filters (incl. payment_method)
 │       ├── categories.py      # list/add/delete custom categories
-│       ├── analytics.py       # summary, breakdown, chart data, forecast, health-score
+│       ├── payment_methods.py # list/add/delete custom payment methods
+│       ├── analytics.py       # summary, breakdown, chart data, forecast, health-score, calendar
 │       ├── budget.py          # set/get/status
 │       ├── insights.py        # 6 pattern detectors, reshaped as dashboard cards
 │       ├── export.py          # CSV / JSON / Excel downloads
 │       └── chat.py            # POST /api/v1/agent/chat — SSE stream
 ├── core/
 │   ├── database.py            # SQLite engine (WAL mode), session factory
-│   ├── models.py               # SQLModel table definitions (5 tables)
-│   ├── auth.py                 # bcrypt hashing, session token logic
+│   ├── models.py               # SQLModel table definitions (incl. PaymentMethod, Session.expires_at)
+│   ├── auth.py                 # bcrypt hashing, sliding-expiry session token logic
 │   └── utils.py                 # shared date-math helpers (current_month_range, get_last_n_months)
 ├── agent/
 │   ├── orchestrator.py        # state machine, pattern matcher, LLM fallthrough
@@ -145,7 +184,8 @@ finos/
 │   ├── tool_budget.py
 │   └── tool_settings.py
 ├── frontend/
-│   ├── index.html
+│   ├── index.html             # marketing landing page
+│   ├── app.html                # app shell — auth screen + sidebar + dashboard + all pages
 │   ├── app.js
 │   └── style.css
 ├── migrations/
@@ -154,7 +194,7 @@ finos/
 │   └── reset_password.py            # CLI password reset for lockouts
 ├── data/
 │   └── finos.db                      # gitignored — not in version control
-├── config.py
+├── config.py                          # incl. SESSION_EXPIRE_HOURS
 └── .env                                # gitignored — GROQ_API_KEY
 ```
 
@@ -169,12 +209,13 @@ There is no `bridge/` directory. The bridge existed in `finance-agent` only to i
 - **Username policy:** 5–30 characters, letters/numbers/underscore/hyphen only, case-sensitive exact-match uniqueness.
 - **Password strength meter:** shown live on signup and change-password forms (Weak / Fair / Good / Strong based on length and character variety). Advisory only — it doesn't block a valid 8-character password, it just nudges toward a stronger one.
 - **Change password:** `PUT /api/v1/auth/me/password` — requires the current password to be verified before the hash is updated.
+- **Session expiry:** sliding 4-hour server-side expiry (extended on every authenticated request) backed by a 30-minute client-side inactivity timer. The two are independent — the idle timer protects against a forgotten unlocked tab; the sliding expiry protects against a leaked token sitting unused.
 - **Forgot password:** there's no SMTP provider in the stack, so this is intentionally CLI-only for now:
   ```bash
   uv run python scripts/reset_password.py <username> <new_password>
   ```
   The login screen's "Forgot password?" link points users to contact an admin rather than pretending there's a self-serve flow. A real email-based reset is on the roadmap once an SMTP provider is chosen.
-- **Session tokens:** random 64-char hex tokens stored server-side in a `Session` table, sent as `Authorization: Bearer <token>`. No JWT in v1 — see [Upgrade Path](#-roadmap).
+- **Session tokens:** random 64-char hex tokens stored server-side in a `Session` table, sent as `Authorization: Bearer <token>`. No JWT in v1 — see [Roadmap](#-roadmap).
 
 ---
 
@@ -269,13 +310,12 @@ categories            → list all categories
 
 ## 🗺️ Roadmap
 
-**Phase 7 — AI imports**
-- CSV upload with column mapping UI + bulk transaction insert
+**Next up**
 - Receipt photo scan via Groq vision (`meta-llama/llama-4-scout-17b-16e-instruct`) → pre-fills the Add Transaction form → user confirms before it saves
+- Bank SMS/statement bulk import via the agent (natural language, no CSV mapping UI required)
 
 **Phase 8 — Differentiators**
 - Anomaly detection — flag transactions that deviate from your pattern, surfaced as an in-app review card, human confirms or dismisses
-- Natural language bulk import from bank SMS/statement text via the agent
 - Recurring transaction detection
 - `/help` command (pattern matcher entry, 0 LLM tokens)
 - Peer comparison, anonymized across users
@@ -283,6 +323,11 @@ categories            → list all categories
 **Phase 9 — Persistent agent memory**
 - `UserMemory` table storing goals/context the agent picks up across sessions
 - User can view/delete stored memories from Settings
+
+**Explicitly deferred**
+- GPay share-URL auto-extraction — no public API; receipt scan + SMS import are the intended alternatives instead
+- Family/household multi-user sharing — needs its own permissions design, not being pursued now
+- Investment as a third transaction type — high-ripple change (touches balance calc, savings rate, budget logic, forecast averaging, agent schemas); needs a dedicated design doc first
 
 **Post-FinOS**
 - Email-based password reset (needs SMTP provider decision)

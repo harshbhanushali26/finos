@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from core.database import create_db
-from api.routes import auth, chat, transactions, categories, analytics, budget, export, insights
+from api.routes import auth, chat, transactions, categories, analytics, budget, export, insights, payment_methods
 
 
 @asynccontextmanager
@@ -51,14 +51,15 @@ app.add_middleware(
 
 PREFIX = "/api/v1"
 
-app.include_router(auth.router,         prefix=PREFIX)
-app.include_router(transactions.router, prefix=PREFIX)
-app.include_router(categories.router,   prefix=PREFIX)
-app.include_router(analytics.router,    prefix=PREFIX)
-app.include_router(budget.router,       prefix=PREFIX)
-app.include_router(export.router,       prefix=PREFIX)
-app.include_router(chat.router,         prefix=PREFIX)
-app.include_router(insights.router,     prefix=PREFIX)
+app.include_router(auth.router,             prefix=PREFIX)
+app.include_router(transactions.router,     prefix=PREFIX)
+app.include_router(categories.router,       prefix=PREFIX)
+app.include_router(analytics.router,        prefix=PREFIX)
+app.include_router(budget.router,           prefix=PREFIX)
+app.include_router(export.router,           prefix=PREFIX)
+app.include_router(chat.router,             prefix=PREFIX)
+app.include_router(insights.router,         prefix=PREFIX)
+app.include_router(payment_methods.router,  prefix=PREFIX)
 
 # ── Static files ───────────────────────────────────────────────────────────
 # Served at / — index.html is the SPA shell

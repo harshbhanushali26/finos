@@ -29,6 +29,7 @@ TOOL_RESULT_TRIM_LENGTH = 60
 
 # ── Auth ───────────────────────────────────────────────────────────────────
 TOKEN_EXPIRE_DAYS = 7
+SESSION_EXPIRE_HOURS = 4
 
 # ── Defaults ───────────────────────────────────────────────────────────────
 DEFAULT_CURRENCY = "INR"
@@ -44,3 +45,6 @@ DEFAULT_EXPENSE_CATEGORIES = [
 ]
 
 
+DEFAULT_PAYMENT_METHODS = [
+    "Cash", "Card", "UPI", "Bank Transfer"
+] 

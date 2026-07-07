@@ -54,13 +54,59 @@ function getCatIcon(name) {
   return CAT_ICONS.default;
 }
 
+function getCatColor(name) {
+  const str = name || 'default';
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) | 0;
+  return CAT_COLORS[Math.abs(hash) % CAT_COLORS.length];
+}
+
 let currentPage = 'dashboard';
-let currentPeriod = 'weekly';
+let currentPeriod = 'monthly';
 let chartTypes = { line:'both', donut:'expense', bar:'both' };
 let txnPage = 1, txnTotalPages = null;
 const TXN_LIMIT = 20;
 let chartLine = null, chartDonut = null, chartBar = null;
 let chatHistory = [], addTxnType = 'expense';
+
+// ── IDLE TIMEOUT ──
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+let idleTimer = null;
+let lastIdleReset = 0;
+const IDLE_ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+
+function resetIdleTimer() {
+  const now = Date.now();
+  if (now - lastIdleReset < 5000) return; // throttle: ignore resets within 5s of the last one
+  lastIdleReset = now;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(handleIdleTimeout, IDLE_TIMEOUT_MS);
+}
+
+function startIdleWatcher() {
+  IDLE_ACTIVITY_EVENTS.forEach(evt => document.addEventListener(evt, resetIdleTimer));
+  resetIdleTimer();
+}
+
+function stopIdleWatcher() {
+  IDLE_ACTIVITY_EVENTS.forEach(evt => document.removeEventListener(evt, resetIdleTimer));
+  clearTimeout(idleTimer);
+  idleTimer = null;
+}
+
+function handleIdleTimeout() {
+  stopIdleWatcher();
+  authToken = null; currentUser = null;
+  localStorage.removeItem('finos-token');
+  localStorage.removeItem('finos-user');
+  chatHistory = [];
+  if (chartLine) { chartLine.destroy(); chartLine = null; }
+  if (chartDonut) { chartDonut.destroy(); chartDonut = null; }
+  if (chartBar) { chartBar.destroy(); chartBar = null; }
+  showAuthScreen();
+  switchAuthTab('login');
+  showToast('Signed out due to inactivity', 'info');
+}
 
 // ── INIT ──
 document.addEventListener('DOMContentLoaded', async () => {
@@ -85,6 +131,7 @@ async function checkAuth() {
   showAuthScreen();
 }
 
+// ── OPTIONAL PAGE OR CONTAINER SETUPS ──
 function showAuthScreen() {
   document.getElementById('authScreen').style.display = 'flex';
   document.getElementById('appShell').style.display = 'none';
@@ -96,7 +143,10 @@ function showApp() {
   updateUserUI();
   setToday();
   loadCategories();
-  loadDashboard();
+  loadPaymentMethodsForAdd();
+  loadFilterPaymentMethods();
+  reloadCurrentDashView();
+  startIdleWatcher();
 }
 
 function updateUserUI() {
@@ -216,6 +266,7 @@ async function signup() {
 
 async function logout() {
   if (!await showConfirm('You will be returned to the login screen.', 'Sign Out', 'Sign out of FinOS?')) return;
+  stopIdleWatcher();
   authToken = null; currentUser = null;
   localStorage.removeItem('finos-token');
   localStorage.removeItem('finos-user');
@@ -266,13 +317,18 @@ function go(page, el) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
   document.getElementById('pageTitle').textContent =
-    {dashboard:'Dashboard',add:'Add Transaction',transactions:'Transactions',budget:'Budget',export:'Export',settings:'Settings'}[page]||page;
-  document.getElementById('periodTabs').style.display = page === 'dashboard' ? 'flex' : 'none';
+    {dashboard:'Dashboard',add:'Add Transaction',transactions:'Transactions',budget:'Budget',manage:'Manage',export:'Export',settings:'Settings'}[page]||page;
   currentPage = page;
-  if (page==='dashboard')    loadDashboard();
-  if (page==='transactions') loadTxns();
+  if (page==='dashboard') {
+    document.getElementById('periodTabs').style.display = 'flex';
+    reloadCurrentDashView();
+  } else {
+    document.getElementById('periodTabs').style.display = 'none';
+  }
+  if (page==='transactions') { loadFilterPaymentMethods(); loadTxns(); }
   if (page==='budget')       loadBudget();
-  if (page==='add')          setToday();
+  if (page==='manage')       loadManage();
+  if (page==='add')          { setToday(); loadCategoriesByType(addTxnType); loadPaymentMethodsForAdd(); }
 }
 
 // ── PERIOD ──
@@ -280,12 +336,38 @@ function setPeriod(p, el) {
   currentPeriod = p;
   document.querySelectorAll('.ptab').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
-  loadDashboard();
+  reloadCurrentDashView();
 }
 
-// ── DASHBOARD ──
-async function loadDashboard() {
-  await Promise.all([loadMetrics(), loadLineChart(), loadBarChart(), loadCategoryBreakdown(), loadBudgetMini(), loadRecentTxns(), loadInsights(), loadForecast(), loadHealthScore()]);
+// ── DASHBOARD (overview / analytics / calendar subviews) ──
+let currentDashView = 'overview';
+
+async function loadDashboardOverview() {
+  selectedCalDay = null;
+  await Promise.all([loadMetrics(), loadLineChart(), loadRecentTxns(), loadMiniCal(), loadBudgetMini()]);
+}
+
+async function loadDashboardAnalytics() {
+  await Promise.all([loadBarChart(), loadCategoryBreakdown(), loadInsights(), loadForecast(), loadHealthScore()]);
+}
+
+function reloadCurrentDashView() {
+  if (currentDashView === 'overview') loadDashboardOverview();
+  else loadDashboardAnalytics();
+}
+
+function switchDashView(view, el) {
+  document.querySelectorAll('.dash-view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('dashview-'+view).classList.add('active');
+  document.querySelectorAll('.subtab').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  currentDashView = view;
+  reloadCurrentDashView();
+}
+
+// ── STATS ──
+async function loadStats() {
+  await Promise.all([loadBarChart(), loadCategoryBreakdown(), loadBudgetMini(), loadInsights(), loadForecast(), loadHealthScore()]);
 }
 
 async function loadMetrics() {
@@ -333,18 +415,19 @@ function renderLine(labels, series) {
 
   const ds = [];
   const t = chartTypes.line;
+  const dotBorder = dark ? '#18161F' : '#fff';
   if (t!=='expense' && series.income) ds.push({
     label:'Income', data:series.income,
-    borderColor:'#10B981', backgroundColor:grad('rgba(16,185,129,0.25)','rgba(16,185,129,0)'),
-    borderWidth:2.5, pointRadius:3, pointHoverRadius:6, pointBackgroundColor:'#10B981',
-    pointBorderColor: dark?'#161B26':'#fff', pointBorderWidth:2, fill:true, tension:0.45
+    borderColor:'#2DD4BF', backgroundColor:grad('rgba(45,212,191,0.22)','rgba(45,212,191,0)'),
+    borderWidth:2.5, pointRadius:3, pointHoverRadius:6, pointBackgroundColor:'#2DD4BF',
+    pointBorderColor: dotBorder, pointBorderWidth:2, fill:true, tension:0.45
   });
   if (t!=='income' && series.expense) ds.push({
     label:'Expense', data:series.expense,
-    borderColor:'#6366F1', backgroundColor:grad('rgba(99,102,241,0.20)','rgba(99,102,241,0)'),
-    borderWidth:2.5, pointRadius:3, pointHoverRadius:6, pointBackgroundColor:'#6366F1',
-    pointBorderColor: dark?'#161B26':'#fff', pointBorderWidth:2, fill:true, tension:0.45
-  });
+    borderColor:'#FB7185', backgroundColor:grad('rgba(251,113,133,0.20)','rgba(251,113,133,0)'),
+    borderWidth:2.5, pointRadius:3, pointHoverRadius:6, pointBackgroundColor:'#FB7185',
+    pointBorderColor: dotBorder, pointBorderWidth:2, fill:true, tension:0.45
+  }); 
 
   chartLine = new Chart(ctx, { type:'line', data:{labels,datasets:ds}, options: chartOpts('line', dark) });
 }
@@ -359,13 +442,10 @@ async function loadCategoryBreakdown() {
     if (currentPeriod==='yearly')  url += `&year=${now.getFullYear()}`;
     const raw = await apiFetch(url) || [];
     const sorted = [...raw].sort((a,b)=>(b.total||0)-(a.total||0));
-    const total = sorted.reduce((a,d)=>a+(d.total||0),0);
     renderDonut(sorted.map(d=>d.category), sorted.map(d=>d.total||0));
-    renderCatMini(sorted.slice(0,5), total);
     updateScopeLabels();
   } catch(e) {
     renderDonut([],[]);
-    document.getElementById('catMiniList').innerHTML = '<div style="font-size:12px;color:var(--t3)">No data</div>';
   }
 }
 
@@ -385,7 +465,7 @@ function renderDonut(labels, values) {
 
   chartDonut = new Chart(ctx, {
     type:'doughnut',
-    data:{ labels, datasets:[{ data:values, backgroundColor:CAT_COLORS.slice(0,labels.length), borderWidth:3, borderColor:dark?'#161B26':'#fff', hoverOffset:8 }] },
+    data:{ labels, datasets:[{ data:values, backgroundColor:CAT_COLORS.slice(0,labels.length), borderWidth:3, borderColor:dark?'#18161F':'#fff', hoverOffset:8 }] },
     options:{ ...chartOpts('donut',dark), cutout:'72%', animation:{ animateRotate:true, duration:700, easing:'easeInOutQuart' } }
   });
 
@@ -418,8 +498,9 @@ function renderBar(labels, series) {
   const dark = document.documentElement.classList.contains('dark');
   const ds = [];
   const t = chartTypes.bar;
-  if (t!=='expense' && series.income) ds.push({ label:'Income', data:series.income, backgroundColor:'#10B981', borderRadius:4, maxBarThickness:28 });
-  if (t!=='income' && series.expense) ds.push({ label:'Expense', data:series.expense, backgroundColor:'#6366F1', borderRadius:4, maxBarThickness:28 });
+  const topRadius = { topLeft:4, topRight:4, bottomLeft:0, bottomRight:0 };
+  if (t!=='expense' && series.income) ds.push({ label:'Income', data:series.income, backgroundColor:'#2DD4BF', borderRadius:topRadius, borderSkipped:false, maxBarThickness:28 });
+  if (t!=='income' && series.expense) ds.push({ label:'Expense', data:series.expense, backgroundColor:'#FB7185', borderRadius:topRadius, borderSkipped:false, maxBarThickness:28 });
   chartBar = new Chart(ctx, { type:'bar', data:{labels,datasets:ds}, options: chartOpts('bar', dark) });
 }
 
@@ -486,8 +567,8 @@ async function loadRecentTxns() {
     if (!data||!data.length) { tbody.innerHTML='<tr><td colspan="4" class="tbl-empty">No transactions yet</td></tr>'; return; }
     tbody.innerHTML = data.map(t=>`
       <tr>
-        <td style="font-size:12px;color:var(--t2)">${fmtDate(t.date)}</td>
-        <td><span class="cat-pill"><i class="ti ${getCatIcon(t.category)}" style="font-size:12px"></i> ${esc(t.category)}</span></td>
+        <td style="font-size:12px;color:var(--t2)">${esc(t.note || '—')}</td>
+        <td><span class="cat-pill" style="background:${getCatColor(t.category)}26;border-color:${getCatColor(t.category)}40;color:${getCatColor(t.category)}"><i class="ti ${getCatIcon(t.category)}" style="font-size:12px"></i> ${esc(t.category)}</span></td>
         <td>${fmtDate(t.date)}</td>
         <td class="amt ${t.type==='income'?'pos':'neg'}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</td>
       </tr>`).join('');
@@ -496,9 +577,9 @@ async function loadRecentTxns() {
 
 // ── CHART OPTIONS ──
 function chartOpts(type, dark) {
-  const tc = dark?'#3A4E66':'#A0B0CC';
-  const lc = dark?'#7A8FA8':'#5A6A85';
-  const gc = dark?'rgba(30,45,66,0.7)':'rgba(226,232,248,0.6)';
+  const tc = dark?'rgba(255,255,255,0.4)':'#94A3B8';
+  const lc = dark?'rgba(255,255,255,0.6)':'#64748B';
+  const gc = dark?'rgba(255,255,255,0.06)':'rgba(15,23,42,0.06)';
   const base = {
     responsive:true, maintainAspectRatio:false,
     plugins:{
@@ -610,24 +691,27 @@ async function loadTxns() {
   try {
     const type = document.getElementById('filterType').value;
     const cat  = document.getElementById('filterCat').value.trim();
+    const pm   = document.getElementById('filterPaymentMethod').value;
     const from = document.getElementById('filterFrom').value;
     const to   = document.getElementById('filterTo').value;
     const off  = (txnPage-1)*TXN_LIMIT;
     let url = `${API}/transactions/?limit=${TXN_LIMIT+1}&offset=${off}`;
     if (type) url+=`&type=${type}`;
     if (cat)  url+=`&category=${encodeURIComponent(cat)}`;
+    if (pm)   url+=`&payment_method=${encodeURIComponent(pm)}`;
     if (from) url+=`&date_from=${from}`;
     if (to)   url+=`&date_to=${to}`;
     let data = await apiFetch(url);
     const tbody = document.getElementById('txnBody');
-    if (!data||!data.length) { tbody.innerHTML='<tr><td colspan="6" class="tbl-empty">No transactions found</td></tr>'; document.getElementById('txnPagination').innerHTML=''; return; }
+    if (!data||!data.length) { tbody.innerHTML='<tr><td colspan="7" class="tbl-empty">No transactions found</td></tr>'; document.getElementById('txnPagination').innerHTML=''; return; }
     const hasMore = data.length > TXN_LIMIT;
     if (hasMore) data = data.slice(0, TXN_LIMIT);
     tbody.innerHTML = data.map(t=>`
       <tr>
         <td style="font-size:12px;color:var(--t2);white-space:nowrap">${fmtDate(t.date)}</td>
-        <td><span class="cat-pill"><i class="ti ${getCatIcon(t.category)}" style="font-size:12px"></i> ${esc(t.category)}</span></td>
+        <td><span class="cat-pill" style="background:${getCatColor(t.category)}26;border-color:${getCatColor(t.category)}40;color:${getCatColor(t.category)}"><i class="ti ${getCatIcon(t.category)}" style="font-size:12px"></i> ${esc(t.category)}</span></td>
         <td><span class="type-badge ${t.type}">${t.type}</span></td>
+        <td style="font-size:12px;color:var(--t2)">${esc(t.payment_method||'—')}</td>
         <td style="font-size:12px;color:var(--t2)">${esc(t.note||'—')}</td>
         <td class="amt ${t.type==='income'?'pos':'neg'}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</td>
         <td><button class="row-action" onclick="openEditModal(${JSON.stringify(t).replace(/"/g,'&quot;')})"><i class="ti ti-pencil"></i></button></td>
@@ -643,9 +727,92 @@ async function loadTxns() {
 
 function chgPage(d) { if (txnPage+d<1) return; txnPage+=d; loadTxns(); }
 
+
 function clearFilters() {
-  ['filterType','filterCat','filterFrom','filterTo'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});
+  ['filterType','filterCat','filterPaymentMethod','filterFrom','filterTo'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});
   txnPage=1; txnTotalPages=null; loadTxns();
+}
+
+// ── MANAGE PAGE ──
+async function loadManage() {
+  await Promise.all([loadManageCategories(), loadManagePaymentMethods()]);
+}
+
+async function loadManageCategories() {
+  try {
+    const data = await apiFetch(`${API}/categories/`);
+    const el = document.getElementById('mgCatList');
+    if (!data||!data.length) { el.innerHTML='<div style="font-size:12px;color:var(--t3)">No categories yet</div>'; return; }
+    el.innerHTML = data.map(c=>`
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">${esc(c.name)}</div>
+          <div class="setting-sub">${c.type}${c.is_default?' · default':''}</div>
+        </div>
+        <button class="btn-danger" onclick="deleteManageCategory(${c.id},'${esc(c.name)}')"><i class="ti ti-trash"></i></button>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+async function addManageCategory() {
+  const name = document.getElementById('mgCatName').value.trim();
+  const type = document.getElementById('mgCatType').value;
+  const err  = document.getElementById('mgCatErr');
+  err.textContent = '';
+  if (!name) { err.textContent = 'Enter a category name'; return; }
+  try {
+    await apiPost(`${API}/categories/`, {name, type});
+    document.getElementById('mgCatName').value = '';
+    showToast('Category added','success');
+    loadManageCategories();
+  } catch(e) { err.textContent = e.message || 'Failed to add category'; }
+}
+
+async function deleteManageCategory(id, name) {
+  if (!await showConfirm(`Transactions using "${name}" will keep the name, but you won't be able to pick it for new ones.`, 'Delete', `Delete category "${name}"?`)) return;
+  try {
+    await apiDel(`${API}/categories/${id}`);
+    showToast('Category deleted','info');
+    loadManageCategories();
+  } catch(e) { showToast(e.message||'Cannot delete — in use','error'); }
+}
+
+async function loadManagePaymentMethods() {
+  try {
+    const data = await apiFetch(`${API}/payment-methods/`);
+    const el = document.getElementById('mgPmList');
+    if (!data||!data.length) { el.innerHTML='<div style="font-size:12px;color:var(--t3)">No payment methods yet</div>'; return; }
+    el.innerHTML = data.map(p=>`
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">${esc(p.name)}</div>
+          <div class="setting-sub">${p.is_default?'default':''}</div>
+        </div>
+        <button class="btn-danger" onclick="deleteManagePaymentMethod(${p.id},'${esc(p.name)}')"><i class="ti ti-trash"></i></button>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+async function addManagePaymentMethod() {
+  const name = document.getElementById('mgPmName').value.trim();
+  const err  = document.getElementById('mgPmErr');
+  err.textContent = '';
+  if (!name) { err.textContent = 'Enter a payment method name'; return; }
+  try {
+    await apiPost(`${API}/payment-methods/`, {name});
+    document.getElementById('mgPmName').value = '';
+    showToast('Payment method added','success');
+    loadManagePaymentMethods();
+  } catch(e) { err.textContent = e.message || 'Failed to add payment method'; }
+}
+
+async function deleteManagePaymentMethod(id, name) {
+  if (!await showConfirm(`Transactions using "${name}" will keep the name, but you won't be able to pick it for new ones.`, 'Delete', `Delete payment method "${name}"?`)) return;
+  try {
+    await apiDel(`${API}/payment-methods/${id}`);
+    showToast('Payment method deleted','info');
+    loadManagePaymentMethods();
+  } catch(e) { showToast(e.message||'Cannot delete — in use','error'); }
 }
 
 // ── ADD TXN ──
@@ -667,12 +834,38 @@ async function loadCategoriesByType(type) {
     if (!sel) return;
     sel.innerHTML='<option value="">Select category…</option>';
     (data||[]).forEach(c=>{ const o=document.createElement('option'); o.value=o.textContent=c.name; sel.appendChild(o); });
+  } catch(e) {console.error('loadManageCategories', e); document.getElementById('mgCatList').innerHTML = '<div style="font-size:12px;color:var(--red)">Failed to load categories</div>';}
+}
+
+// async function loadPaymentMethods() { await loadPaymentMethodsForAdd(); }
+
+async function loadPaymentMethodsForAdd() {
+  try {
+    const data = await apiFetch(`${API}/payment-methods/`);
+    const sel = document.getElementById('addPaymentMethod');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Select payment method…</option>';
+    (data||[]).forEach(p => { const o=document.createElement('option'); o.value=o.textContent=p.name; sel.appendChild(o); });
+  } catch(e) {}
+}
+
+// async function loadPaymentMethodsFilter() { await loadFilterPaymentMethods(); }
+
+async function loadFilterPaymentMethods() {
+  try {
+    const data = await apiFetch(`${API}/payment-methods/`);
+    const sel = document.getElementById('filterPaymentMethod');
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All Payment Methods</option>' + (data||[]).map(p=>`<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+    sel.value = current;
   } catch(e) {}
 }
 
 async function submitTxn() {
   const amount = parseFloat(document.getElementById('addAmount').value);
   const cat    = document.getElementById('addCategory').value;
+  const pm     = document.getElementById('addPaymentMethod').value;
   const date   = document.getElementById('addDate').value;
   const note   = document.getElementById('addNote').value.trim();
   const fb     = document.getElementById('addFb');
@@ -680,11 +873,12 @@ async function submitTxn() {
   if (!cat)               return showFb(fb,'Select a category','err');
   if (!date)              return showFb(fb,'Select a date','err');
   try {
-    await apiPost(`${API}/transactions/`,{amount,category:cat,date,note,type:addTxnType});
+    await apiPost(`${API}/transactions/`,{amount,category:cat,payment_method:pm||null,date,note,type:addTxnType});
     showFb(fb,'Transaction added!','ok');
     showToast('Transaction added','success');
     document.getElementById('addAmount').value='';
     document.getElementById('addNote').value='';
+    document.getElementById('addPaymentMethod').value='';
   } catch(e) { showFb(fb,e.message||'Failed','err'); }
 }
 
@@ -696,6 +890,7 @@ async function openEditModal(t) {
   document.getElementById('editDate').value = t.date;
   document.getElementById('editNote').value = t.note || '';
   await loadEditCategories(t.type, t.category);
+  await loadEditPaymentMethods(t.payment_method);
   document.getElementById('editModal').classList.add('open');
 }
 
@@ -704,7 +899,34 @@ async function loadEditCategories(type, selected) {
     const data = await apiFetch(`${API}/categories/?type=${type}`);
     const sel = document.getElementById('editCategory');
     sel.innerHTML = (data||[]).map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
-    if (selected) sel.value = selected;
+    if (selected) {
+      sel.value = selected;
+      if (sel.value !== selected) {
+        const o = document.createElement('option');
+        o.value = selected;
+        o.textContent = selected + ' (no longer exists)';
+        sel.appendChild(o);
+        sel.value = selected;
+      }
+    }
+  } catch(e) {}
+}
+
+async function loadEditPaymentMethods(selected) {
+  try {
+    const data = await apiFetch(`${API}/payment-methods/`);
+    const sel = document.getElementById('editPaymentMethod');
+    sel.innerHTML = '<option value="">—</option>' + (data||[]).map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('');
+    if (selected) {
+      sel.value = selected;
+      if (sel.value !== selected) {
+        const o = document.createElement('option');
+        o.value = selected;
+        o.textContent = selected + ' (no longer exists)';
+        sel.appendChild(o);
+        sel.value = selected;
+      }
+    }
   } catch(e) {}
 }
 
@@ -719,8 +941,9 @@ async function saveEdit() {
   const type=document.getElementById('editType').value;
   const date=document.getElementById('editDate').value;
   const category=document.getElementById('editCategory').value;
+  const payment_method=document.getElementById('editPaymentMethod').value || null;
   const note=document.getElementById('editNote').value;
-  try { await apiPut(`${API}/transactions/${id}`,{amount,type,date,category,note}); closeModal('editModal'); showToast('Updated','success'); loadTxns(); }
+  try { await apiPut(`${API}/transactions/${id}`,{amount,type,date,category,payment_method,note}); closeModal('editModal'); showToast('Updated','success'); loadTxns(); }
   catch(e) { showToast(e.message||'Failed','error'); }
 }
 
@@ -903,18 +1126,18 @@ async function sendMsg() {
       if (done) break;
       for (const line of dec.decode(value,{stream:true}).split('\n')) {
         if (!line.startsWith('data:')) continue;
-        // const d = line.slice(5).trim();
         const d = line.startsWith('data: ') ? line.slice(6) : line.slice(5);
         if (d==='[DONE]') { chatHistory.push({role:'assistant',content:full}); input.disabled=false; document.getElementById('chatSendBtn').disabled=false; input.focus(); return; }
         if (!d) continue;
         if (!bubble) bubble = createBubble();
         full+=d;
-        bubble.querySelector('.mbubble').textContent=full;
+        console.log('RAW:', JSON.stringify(full));
+        bubble.querySelector('.mbubble').textContent = full.replace(/\\n/g, '\n');
         scrollChat();
       }
     }
-    if (!bubble) appendMsg('ai', full||'(no response)');
-    chatHistory.push({role:'assistant',content:full});
+    if (!bubble) appendMsg('ai', (full||'(no response)').replace(/\\n/g, '\n'));
+    chatHistory.push({role:'assistant',content:full.replace(/\\n/g, '\n')});
   } catch(e) { typing.remove(); appendMsg('ai','Error: '+e.message); }
   input.disabled=false; document.getElementById('chatSendBtn').disabled=false; input.focus();
 }
@@ -964,7 +1187,108 @@ function clearChat() {
   showToast('Chat cleared','info');
 }
 
+// ── MINI CALENDAR + REACTIVE RECENT TXN FILTER ──
+let calMonthDate = new Date();
+let calDataCache = {};
+let selectedCalDay = null;
+
+function changeCalMonth(delta) {
+  calMonthDate = new Date(calMonthDate.getFullYear(), calMonthDate.getMonth() + delta, 1);
+  loadMiniCal();
+}
+
+async function loadMiniCal() {
+  const monthStr = ym(calMonthDate);
+  setEl('miniCalMonthLabel', calMonthDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }));
+  const grid = document.getElementById('miniCalGrid');
+  grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--t3);font-size:11px">Loading…</div>';
+  try {
+    const data = await apiFetch(`${API}/analytics/calendar?month=${monthStr}`);
+    calDataCache = data || {};
+    renderMiniCal();
+  } catch (e) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:20px;color:var(--red);font-size:11px">Failed to load</div>';
+  }
+}
+
+function renderMiniCal() {
+  const grid = document.getElementById('miniCalGrid');
+  const year = calMonthDate.getFullYear();
+  const month = calMonthDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startOffset = (firstDay.getDay() + 6) % 7; // Monday-first
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  let html = '';
+  for (let i = 0; i < startOffset; i++) html += '<div class="mc-cell empty"></div>';
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const info = calDataCache[dateStr];
+    const isToday = dateStr === todayStr;
+    const isSel = dateStr === selectedCalDay;
+    const dot = info && info.count ? `<div class="mc-dot ${info.net>=0?'pos':'neg'}"></div>` : '';
+    const titleAttr = info && info.count ? ` title="${fmt(info.net)} · ${info.count} txn"` : '';
+    html += `<div class="mc-cell ${isToday?'today':''} ${isSel?'selected':''}"${titleAttr} onclick="selectCalDay('${dateStr}')">${d}${dot}</div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function selectCalDay(dateStr) {
+  selectedCalDay = dateStr;
+  renderMiniCal();
+  filterRecentByDay(dateStr);
+}
+
+async function filterRecentByDay(dateStr) {
+  const tbody = document.getElementById('recentBody');
+  tbody.innerHTML = '<tr><td colspan="4" class="tbl-empty">Loading…</td></tr>';
+  setEl('recentTxnsTitle', fmtDate(dateStr));
+  setEl('recentTxnsSub', 'Transactions on this day');
+  document.getElementById('recentTxnsActions').innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="link-btn" onclick="addTxnForDay('${dateStr}')"><i class="ti ti-plus"></i> Add</button>
+      <button class="link-btn" onclick="clearRecentFilter()">Clear</button>
+    </div>`;
+  try {
+    const data = await apiFetch(`${API}/transactions/?limit=200&offset=0&date_from=${dateStr}&date_to=${dateStr}`);
+    if (!data || !data.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="tbl-empty">No transactions this day</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.map(t => `
+      <tr>
+        <td style="font-size:12px;color:var(--t2)">${esc(t.note || '—')}</td>
+        <td><span class="cat-pill" style="background:${getCatColor(t.category)}26;border-color:${getCatColor(t.category)}40;color:${getCatColor(t.category)}"><i class="ti ${getCatIcon(t.category)}" style="font-size:12px"></i> ${esc(t.category)}</span></td>
+        <td>${fmtDate(t.date)}</td>
+        <td class="amt ${t.type==='income'?'pos':'neg'}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</td>
+      </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="tbl-empty">Failed to load</td></tr>';
+  }
+}
+
+function clearRecentFilter() {
+  selectedCalDay = null;
+  renderMiniCal();
+  setEl('recentTxnsTitle', 'Recent Transactions');
+  setEl('recentTxnsSub', 'Latest income and expenses');
+  document.getElementById('recentTxnsActions').innerHTML =
+    `<button class="link-btn" onclick="go('transactions',document.querySelector('[onclick*=transactions]'))">View All</button>`;
+  loadRecentTxns();
+}
+
+function addTxnForDay(dateStr) {
+  go('add', document.querySelector(`[onclick*="go('add'"]`));
+  setTimeout(() => { document.getElementById('addDate').value = dateStr; }, 0);
+}
+
+
+
+
 // ── SIDEBAR ──
+
 function toggleSidebar() {
   const s = document.getElementById('sidebar');
   const c = s.classList.toggle('col');
@@ -985,7 +1309,7 @@ function toggleTheme() {
   document.documentElement.className = dark?'light':'dark';
   localStorage.setItem('finos-theme', dark?'light':'dark');
   updateThemeUI();
-  if (currentPage==='dashboard') setTimeout(loadDashboard,50);
+  if (currentPage==='dashboard') setTimeout(reloadCurrentDashView,50);
 }
 
 function restoreTheme() {
@@ -1040,6 +1364,7 @@ function fmtTime() { return new Date().toLocaleTimeString('en-IN',{hour:'2-digit
 function esc(s) { if(!s)return''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function setEl(id,v) { const el=document.getElementById(id); if(el)el.textContent=v; }
 function showFb(el,msg,type) { el.textContent=msg;el.className=`ffeedback ${type}`;setTimeout(()=>{el.textContent='';el.className='ffeedback'},3000); }
+
 function showToast(msg, type='info', onClick=null) {
   const t = document.getElementById('toast');
   t.textContent = msg;

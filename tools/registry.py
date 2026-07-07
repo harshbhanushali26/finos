@@ -23,11 +23,11 @@ TOOL_REGISTRY = {
     },
     "stage_delete": {
     "handler": stage_delete,
-    "schema": pydantic_to_groq(StageDelete, "stage_delete", "Stage transactions for deletion after view_transactions. Always call view_transactions first."),
+    "schema": pydantic_to_groq(StageDelete, "stage_delete", "Find transactions matching filters (category, month, date, type) and stage them for deletion in one call. Do not call view_transactions first. Pass limit=1 if user says 'last' or 'latest'."),
     },
     "stage_update": {
         "handler": stage_update,
-        "schema": pydantic_to_groq(StageUpdate, "stage_update", "Stage transactions for update after view_transactions. Pass only the fields that need changing."),
+        "schema": pydantic_to_groq(StageUpdate, "stage_update", "Find transactions matching filters (category, month, date, type) and stage them for update with new_amount/new_category/new_date/new_note in one call. Do not call view_transactions first."),
     },
     "view_transactions": {
         "handler": view_transactions,
@@ -113,8 +113,8 @@ def execute(tool_name: str, args: dict, session) -> str:
 # ── Intent → tool name mapping ─────────────────────────────────────────────────
 
 INTENT_TOOLS = {
-    "delete":    ["view_transactions", "stage_delete"],
-    "update":    ["view_transactions", "stage_update"],
+    "delete":    ["stage_delete"],
+    "update":    ["stage_update"],
     "add":       ["add_transaction", "get_categories"],
     "view":      ["view_transactions", "get_daily_summary", "get_monthly_summary"],
     "analytics": ["get_category_breakdown", "get_top_categories", "get_monthly_summary"],

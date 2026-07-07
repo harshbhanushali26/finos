@@ -3,55 +3,20 @@
 All DB operations use session.db_session directly — no bridge.
 """
 
-from calendar import monthrange
 from datetime import datetime, date as dt_date
 
-from sqlmodel import select, func
+from sqlmodel import select
 
-from core.models import Transaction, User
+from core.models import Transaction
+from core.utils import month_range
+from core.shared_analytics import sum_by_type, category_breakdown
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _month_range(month: str) -> tuple[dt_date, dt_date]:
-    """Return (first_day, last_day) date objects for a YYYY-MM string."""
-    year, mon = map(int, month.split("-"))
-    last_day = monthrange(year, mon)[1]
-    return dt_date(year, mon, 1), dt_date(year, mon, last_day)
-
-
-def _sum_by_type(db, user_id: int, txn_type: str, date_start: dt_date, date_end: dt_date) -> float:
-    """Sum transaction amounts for a user/type within a date range."""
-    result = db.exec(
-        select(func.sum(Transaction.amount)).where(
-            Transaction.user_id == user_id,
-            Transaction.type == txn_type,
-            Transaction.date >= date_start,
-            Transaction.date <= date_end,
-        )
-    ).one()
-    return float(result or 0)
-
-
-def _breakdown_by_category(
-    db, user_id: int, txn_type: str, date_start: dt_date, date_end: dt_date
-) -> dict[str, float]:
-    """Return {category: total} for a user/type within a date range."""
-    rows = db.exec(
-        select(Transaction.category, func.sum(Transaction.amount))
-        .where(
-            Transaction.user_id == user_id,
-            Transaction.type == txn_type,
-            Transaction.date >= date_start,
-            Transaction.date <= date_end,
-        )
-        .group_by(Transaction.category)
-    ).all()
-    return {cat: float(total) for cat, total in rows}
-
-
 def _carry_forward(db, user_id: int, up_to: dt_date) -> float:
     """Net balance from all transactions before the given date."""
+    from sqlmodel import func
     income = db.exec(
         select(func.sum(Transaction.amount)).where(
             Transaction.user_id == user_id,
@@ -78,11 +43,11 @@ def get_daily_summary(args: dict, session) -> str:
         date_str = args["date"]
         day = datetime.strptime(date_str, "%Y-%m-%d").date()
 
-        income = _sum_by_type(db, session.user_id, "income", day, day)
-        expense = _sum_by_type(db, session.user_id, "expense", day, day)
+        income = sum_by_type(db, session.user_id, "income", day, day)
+        expense = sum_by_type(db, session.user_id, "expense", day, day)
         balance = income - expense
         carry_forward = _carry_forward(db, session.user_id, day)
-        breakdown = _breakdown_by_category(db, session.user_id, "expense", day, day)
+        breakdown = category_breakdown(db, session.user_id, "expense", day, day)
 
         txns = db.exec(
             select(Transaction).where(
@@ -112,13 +77,13 @@ def get_monthly_summary(args: dict, session) -> str:
     try:
         db = session.db_session
         month = args["month"]
-        date_start, date_end = _month_range(month)
+        date_start, date_end = month_range(month)
 
-        income = _sum_by_type(db, session.user_id, "income", date_start, date_end)
-        expense = _sum_by_type(db, session.user_id, "expense", date_start, date_end)
+        income = sum_by_type(db, session.user_id, "income", date_start, date_end)
+        expense = sum_by_type(db, session.user_id, "expense", date_start, date_end)
         balance = income - expense
         carry_forward = _carry_forward(db, session.user_id, date_start)
-        breakdown = _breakdown_by_category(db, session.user_id, "expense", date_start, date_end)
+        breakdown = category_breakdown(db, session.user_id, "expense", date_start, date_end)
 
         txns = db.exec(
             select(Transaction).where(
@@ -154,13 +119,12 @@ def get_category_breakdown(args: dict, session) -> str:
 
         month = args.get("month")
         if month:
-            date_start, date_end = _month_range(month)
+            date_start, date_end = month_range(month)
         else:
-            # all time
             date_start = dt_date(2000, 1, 1)
             date_end = dt_date(2099, 12, 31)
 
-        breakdown = _breakdown_by_category(db, session.user_id, txn_type, date_start, date_end)
+        breakdown = category_breakdown(db, session.user_id, txn_type, date_start, date_end)
 
         if not breakdown:
             month_str = f" for {month}" if month else ""
@@ -180,9 +144,9 @@ def get_top_categories(args: dict, session) -> str:
         db = session.db_session
         month = args["month"]
         top_n = args.get("top_n", 5)
-        date_start, date_end = _month_range(month)
+        date_start, date_end = month_range(month)
 
-        breakdown = _breakdown_by_category(db, session.user_id, "expense", date_start, date_end)
+        breakdown = category_breakdown(db, session.user_id, "expense", date_start, date_end)
         if not breakdown:
             return f"No expense data found for {month}"
 

@@ -33,12 +33,20 @@ class Category(SQLModel, table=True):
     is_default: bool = Field(default=False)                     # True = seeded at signup for defaults(not by users)
 
 
+class PaymentMethod(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id")
+    name: str = Field(index=True)
+    is_default: bool = Field(default=False)
+
+
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     amount: float
     type: str
     category: str                                               # stored as string — no FK by design
+    payment_method: str | None = Field(default=None)
     date: date
     note: str = Field(default="")
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -57,4 +65,5 @@ class Session(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
     token: str = Field(unique=True, index=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC)) 
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    expires_at: Optional[datetime] = Field(default=None)

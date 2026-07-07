@@ -7,41 +7,27 @@ run_all(db, user_id, month) — entry point called by agent/core.py or pattern_m
 """
 
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date
 
-from sqlmodel import select, func
+from sqlmodel import select
 
 from core.models import Transaction
+from core.utils import month_range
+from core.shared_analytics import category_breakdown, sum_by_type
 from agent.utils import get_last_n_months
 
 
 # ── Shared query helpers ───────────────────────────────────────────────────────
 
-def _month_range(month: str) -> tuple[date, date]:
-    year, mon = map(int, month.split("-"))
-    last_day = monthrange(year, mon)[1]
-    return date(year, mon, 1), date(year, mon, last_day)
-
-
 def _get_category_breakdown(db, user_id: int, txn_type: str, month: str) -> dict[str, float]:
     """Return {category: total} for a user/type/month."""
-    date_start, date_end = _month_range(month)
-    rows = db.exec(
-        select(Transaction.category, func.sum(Transaction.amount))
-        .where(
-            Transaction.user_id == user_id,
-            Transaction.type == txn_type,
-            Transaction.date >= date_start,
-            Transaction.date <= date_end,
-        )
-        .group_by(Transaction.category)
-    ).all()
-    return {cat: float(total) for cat, total in rows}
+    date_start, date_end = month_range(month)
+    return category_breakdown(db, user_id, txn_type, date_start, date_end)
 
 
 def _get_expense_transactions(db, user_id: int, month: str) -> list[Transaction]:
     """Return all expense transactions for a user/month."""
-    date_start, date_end = _month_range(month)
+    date_start, date_end = month_range(month)
     return db.exec(
         select(Transaction).where(
             Transaction.user_id == user_id,
@@ -54,16 +40,8 @@ def _get_expense_transactions(db, user_id: int, month: str) -> list[Transaction]
 
 def _get_monthly_expense_total(db, user_id: int, month: str) -> float:
     """Return total expense amount for a user/month."""
-    date_start, date_end = _month_range(month)
-    result = db.exec(
-        select(func.sum(Transaction.amount)).where(
-            Transaction.user_id == user_id,
-            Transaction.type == "expense",
-            Transaction.date >= date_start,
-            Transaction.date <= date_end,
-        )
-    ).one()
-    return float(result or 0)
+    date_start, date_end = month_range(month)
+    return sum_by_type(db, user_id, "expense", date_start, date_end)
 
 
 # ── Detector 1 — spending spikes ──────────────────────────────────────────────
@@ -113,7 +91,6 @@ def detect_subscriptions(db, user_id: int, month: str) -> list[str]:
         if any(len(t) == 0 for t in monthly_txns):
             return []
 
-        # {category: [total_per_month]}
         cat_amounts: dict[str, list[float]] = {}
         for month_txns in monthly_txns:
             seen: dict[str, float] = {}
@@ -156,7 +133,6 @@ def detect_weekend_vs_weekday(db, user_id: int, month: str) -> list[str]:
         weekday_total = 0.0
 
         for txn in txns:
-            # txn.date is already a date object in SQLModel
             day_of_week = txn.date.weekday()
             if day_of_week >= 5:
                 weekend_total += txn.amount
@@ -294,16 +270,7 @@ def detect_new_categories(db, user_id: int, month: str) -> list[str]:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_all(db, user_id: int, month: str) -> list[str]:
-    """Run all detectors and return combined insights.
-
-    Args:
-        db:      SQLModel Session
-        user_id: User PK
-        month:   YYYY-MM string
-
-    Returns:
-        List of insight strings — empty list if none triggered
-    """
+    """Run all detectors and return combined insights."""
     detectors = [
         detect_spending_spikes,
         detect_subscriptions,

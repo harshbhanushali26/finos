@@ -21,6 +21,7 @@ from datetime import date, timedelta
 
 from sqlmodel import select, func
 
+from core import shared_txns
 from core.models import Transaction, User, Budget, Category
 
 
@@ -229,46 +230,15 @@ def _category_breakdown(db, user_id: int, txn_type: str, month: str) -> dict[str
 
 def _add_transaction(db, user_id: int, txn_type: str, amount: float,
                         category: str, txn_date: str, note: str | None) -> dict:
-    """Insert a transaction. Returns {"success": True} or {"success": False, "error": ...}."""
-    from core.models import Category
+    """Insert a transaction. Assumes category already exists — caller must verify first."""
     from datetime import datetime as dt
 
     try:
         parsed_date = dt.strptime(txn_date, "%Y-%m-%d").date()
 
-        # ensure category exists
-        existing_cat = db.exec(
-            select(Category).where(
-                Category.user_id == user_id,
-                Category.name == category,
-                Category.type == txn_type,
-            )
-        ).first()
-        if not existing_cat:
-            db.add(Category(user_id=user_id, name=category, type=txn_type, is_default=False))
-            db.commit()
+        duplicate = shared_txns.find_duplicate(db, user_id, txn_type, amount, category, parsed_date)
 
-        # duplicate check
-        duplicate = db.exec(
-            select(Transaction).where(
-                Transaction.user_id == user_id,
-                Transaction.type == txn_type,
-                Transaction.amount == amount,
-                Transaction.category == category,
-                Transaction.date == parsed_date,
-            )
-        ).first()
-
-        txn = Transaction(
-            user_id=user_id,
-            amount=amount,
-            type=txn_type,
-            category=category,
-            date=parsed_date,
-            note=note or "",
-        )
-        db.add(txn)
-        db.commit()
+        shared_txns.insert_transaction(db, user_id, txn_type, amount, category, parsed_date, note=note or "")
 
         return {"success": True, "warning": "possible duplicate" if duplicate else None}
 
@@ -489,12 +459,33 @@ def _handle_add(original: str, normalized: str, session) -> dict:
         category = _extract_category(original_clean)
         if category is None:
             return {"matched": False}
+        category = category.title()   # normalize casing — "food" and "Food" must match the same row
 
         txn_date = _extract_date(normalized_clean)
         if txn_date is None:
             return {"matched": False}
 
-        db     = session.db_session
+        db = session.db_session
+
+        if not shared_txns.category_exists(db, session.user_id, category, txn_type):
+            session.state.set_pending_direct({
+                "action_type": "new_category",
+                "category": category,
+                "txn_type": txn_type,
+                "amount": amount,
+                "date_str": txn_date,
+                "note": note or "",
+            })
+            currency = _get_currency(session)
+            return {
+                "matched": True,
+                "response": (
+                    f"'{category}' isn't a category yet. Create it and log this "
+                    f"{txn_type} of {currency}{amount:,.0f} on {txn_date}? "
+                    f"Reply yes to confirm or no to cancel."
+                ),
+            }
+
         result = _add_transaction(db, session.user_id, txn_type, amount, category, txn_date, note)
 
         if not result.get("success"):
@@ -503,11 +494,10 @@ def _handle_add(original: str, normalized: str, session) -> dict:
         if result.get("warning") == "possible duplicate":
             return {"matched": False}
 
-        # build response with category total for this month
         currency  = _get_currency(session)
         month_str = txn_date[:7]
         breakdown = _category_breakdown(db, session.user_id, txn_type, month_str)
-        cat_total = breakdown.get(category.title(), 0)
+        cat_total = breakdown.get(category, 0)
 
         date_obj   = date.fromisoformat(txn_date)
         date_label = (
@@ -518,8 +508,8 @@ def _handle_add(original: str, normalized: str, session) -> dict:
 
         type_label = "income" if txn_type == "income" else "expense"
         response   = (
-            f"Added {currency}{amount:,.0f} for {category.title()} {date_label}. "
-            f"{category.title()} {type_label} this month: {currency}{cat_total:,.0f}."
+            f"Added {currency}{amount:,.0f} for {category} {date_label}. "
+            f"{category} {type_label} this month: {currency}{cat_total:,.0f}."
         )
         return {"matched": True, "response": response}
 

@@ -55,12 +55,25 @@ class CategoryRead(BaseModel):
     type: str
     is_default: bool
 
+
+# ── Paymetn Methods ─────────────────────────────────────────────────────────────
+
+class PaymentMethodCreate(BaseModel):
+    name: str
+
+class PaymentMethodRead(BaseModel):
+    id: int
+    name: str
+    is_default: bool
+
+
 # ── Transactions ───────────────────────────────────────────────────────────
 
 class TransactionCreate(BaseModel):
     amount: float
     type: str           # "income" or "expense"
     category: str
+    payment_method: Optional[str] = None
     date: dt_date
     note: Optional[str] = ""
 
@@ -69,6 +82,7 @@ class TransactionUpdate(BaseModel):
     amount: Optional[float] = None
     type: Optional[str] = None
     category: Optional[str] = None
+    payment_method: Optional[str] = None
     date: Optional[dt_date] = None
     note: Optional[str] = None
 
@@ -78,8 +92,10 @@ class TransactionRead(BaseModel):
     amount: float
     type: str
     category: str
+    payment_method: Optional[str] = None
     date: dt_date
     note: str
+    duplicate_warning: str | None = None
     created_at: datetime
 
 
