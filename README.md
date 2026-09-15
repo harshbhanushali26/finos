@@ -310,6 +310,14 @@ categories            → list all categories
 
 ## 🗺️ Roadmap
 
+
+**In Progress — Service Consolidation & Architecture Modernization**
+- **Unified Transaction Service Layer (`core/services.py`)** — Centralize all transaction business logic (duplicate checking, category policies, query filtering) into a pure domain layer returning typed dataclasses, turning the REST API, LLM tools, and pattern matcher into thin adapters.
+- **First-Class Payment Methods in Agent** — Bring full payment method support (Cash, Card, UPI, Bank Transfer) to the AI chat agent with natural language regex extraction in the pattern matcher and updated tool schemas.
+- **Persistent DB-Backed Agent State** — Replace in-memory chat session dictionaries and custom dependency state with persistent SQLModel tables (`AgentSessionRecord`, `AgentPendingAction`), ensuring multi-turn confirmation flows and conversation history survive server restarts and multi-worker deployments.
+
+
+
 **Next up**
 - Receipt photo scan via Groq vision (`meta-llama/llama-4-scout-17b-16e-instruct`) → pre-fills the Add Transaction form → user confirms before it saves
 - Bank SMS/statement bulk import via the agent (natural language, no CSV mapping UI required)
