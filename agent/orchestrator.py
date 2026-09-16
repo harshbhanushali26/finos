@@ -13,43 +13,74 @@ Flow:
 
 from agent import llm as agent_llm
 from agent.pattern_matcher import match as pm_match
-from tools.tool_transactions import add_transaction, delete_transaction, update_transaction, _ensure_category
+from core.services import (
+    ServiceStatus,
+    create_transaction as service_create_transaction,
+    update_transaction as service_update_transaction,
+    delete_transaction as service_delete_transaction,
+)
 
 
 # ── Confirm executor ──────────────────────────────────────────────────────────
-
 def _execute_pending(session) -> str:
-    """Execute the confirmed delete, update, or new-category action directly via tool functions."""
+    """Execute confirmed delete, update, or new-category action directly via core.services."""
     action = session.state.confirm()
     if not action:
         return "Nothing to confirm."
 
     try:
         if action["action_type"] == "delete":
-            result = delete_transaction({"txn_id": action["txn_id"]}, session)
-            return f"Deleted — {action['description']}." if "successfully" in result else f"Failed — {result}"
+            res = service_delete_transaction(session.db_session, session.user_id, action["txn_id"])
+            if res.status == ServiceStatus.SUCCESS:
+                return f"Deleted — {action['description']}."
+            return f"Failed — {res.error_message or 'Transaction not found'}."
 
         elif action["action_type"] == "update":
-            args = {"txn_id": action["txn_id"], **action["fields"]}
-            result = update_transaction(args, session)
-            changes = ", ".join(f"{k} → {v}" for k, v in action["fields"].items())
-            return f"Updated — {action['description']}. Changed {changes}." if "successfully" in result else f"Failed — {result}"
+            res = service_update_transaction(
+                session.db_session,
+                session.user_id,
+                action["txn_id"],
+                amount=action["fields"].get("amount"),
+                type_=action["fields"].get("type"),
+                category=action["fields"].get("category"),
+                date=action["fields"].get("date"),
+                note=action["fields"].get("note"),
+                payment_method=action["fields"].get("payment_method"),
+                allow_create_category=True,
+                allow_create_payment_method=True,
+            )
+            if res.status == ServiceStatus.SUCCESS:
+                changes = ", ".join(f"{k} → {v}" for k, v in action["fields"].items())
+                return f"Updated — {action['description']}. Changed {changes}."
+            return f"Failed — {res.error_message}."
 
-        elif action["action_type"] == "new_category":
-            _ensure_category(action["category"], action["txn_type"], session.user_id, session.db_session)
-            result = add_transaction({
-                "type": action["txn_type"],
-                "amount": action["amount"],
-                "category": action["category"],
-                "date": action["date_str"],
-                "note": action["note"],
-            }, session)
-            return result
+        elif action["action_type"] in ("new_category", "new_payment_method"):
+            res = service_create_transaction(
+                session.db_session,
+                session.user_id,
+                type_=action["txn_type"],
+                amount=action["amount"],
+                category=action["category"],
+                date=action["date_str"],
+                note=action.get("note", ""),
+                payment_method=action.get("payment_method"),
+                allow_create_category=True,
+                allow_create_payment_method=True,
+            )
+            if res.status in (ServiceStatus.CREATED, ServiceStatus.DUPLICATE_DETECTED):
+                pm_str = f" via {action['payment_method']}" if action.get("payment_method") else ""
+                warn = " (⚠️ possible duplicate)" if res.is_duplicate else ""
+                return (
+                    f"Created and logged — {action['txn_type']} of ₹{action['amount']:,.0f} "
+                    f"for {action['category']} on {action['date_str']}{pm_str}.{warn}"
+                )
+            return f"Failed: {res.error_message}"
 
     except Exception as e:
         return f"Action failed: {str(e)}"
 
     return "Unknown action type."
+
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 

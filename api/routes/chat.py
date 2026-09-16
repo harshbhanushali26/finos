@@ -30,31 +30,21 @@ from core.models import User
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-# In-memory session store — keyed by user_id
-# Intentionally module-level for v1: single user, single process
-_sessions: dict[int, Session] = {}
-
 
 class ChatRequest(BaseModel):
     message: str
 
-
-def _get_or_create_session(user: User, db) -> Session:
-    """Return existing Session for this user, or create and initialise a new one."""
-    if user.id not in _sessions:
-        session = Session(
-            user_id=user.id,
-            username=user.username,
-            db_session=db,
-        )
+def _get_session(user: User, db: Session) -> Session:
+    """Load or initialize user session backed by SQLite."""
+    session = Session(
+        user_id=user.id,
+        username=user.username,
+        db_session=db,
+    )
+    if not session.history:
         session.add_system_prompt()
-        _sessions[user.id] = session
-    else:
-        # Rebind db_session on every request — SQLModel sessions must not be
-        # reused across HTTP requests; tools always get a live session this way
-        _sessions[user.id].db_session = db
+    return session
 
-    return _sessions[user.id]
 
 
 async def _stream_response(response: str):
@@ -83,7 +73,8 @@ async def agent_chat(
     if not body.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    session = _get_or_create_session(current_user, db)
+    # session = _get_or_create_session(current_user, db)
+    session = _get_session(current_user, db)
 
     async def event_stream():
         try:

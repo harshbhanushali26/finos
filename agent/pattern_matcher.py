@@ -24,6 +24,12 @@ from sqlmodel import select, func
 from core import shared_txns
 from core.models import Transaction, User, Budget, Category
 
+from core.services import (
+    ServiceStatus,
+    create_transaction as service_create_transaction,
+)
+
+
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -40,6 +46,7 @@ BALANCE_PHRASES = {
     "how much do i have", "how much left", "how much do i have left",
     "what's my balance", "whats my balance"
 }
+STOP_WORDS = {"a", "an", "the", "my", "me", "i", "it", "this", "that", "and", "in", "to", "via", "using", "by", "with", "through"}
 
 BUDGET_PHRASES = {"budget", "budgets", "budget status", "my budget", "show budget"}
 CATEGORY_PHRASES = {"categories", "category list", "show categories", "my categories"}
@@ -226,24 +233,6 @@ def _category_breakdown(db, user_id: int, txn_type: str, month: str) -> dict[str
         .group_by(Transaction.category)
     ).all()
     return {cat: float(total) for cat, total in rows}
-
-
-def _add_transaction(db, user_id: int, txn_type: str, amount: float,
-                        category: str, txn_date: str, note: str | None) -> dict:
-    """Insert a transaction. Assumes category already exists — caller must verify first."""
-    from datetime import datetime as dt
-
-    try:
-        parsed_date = dt.strptime(txn_date, "%Y-%m-%d").date()
-
-        duplicate = shared_txns.find_duplicate(db, user_id, txn_type, amount, category, parsed_date)
-
-        shared_txns.insert_transaction(db, user_id, txn_type, amount, category, parsed_date, note=note or "")
-
-        return {"success": True, "warning": "possible duplicate" if duplicate else None}
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 # ── Budget ─────────────────────────────────────────────────────────────────────
@@ -436,18 +425,45 @@ def _is_add_query(normalized: str) -> bool:
     return first_word in ALL_TRIGGERS
 
 
+# ── Payment Method Extraction Helper ──────────────────────────────────────────
+def _extract_payment_method(text: str) -> tuple[str | None, str]:
+    """Extract payment method and return (payment_method, cleaned_text)."""
+    pattern = r"\b(?:via|using|by|through|with)\s+(upi|cash|card|credit\s+card|debit\s+card|bank\s+transfer|gpay|phonepe|paytm)\b"
+    m = re.search(pattern, text, re.IGNORECASE)
+    if not m:
+        return None, text
+
+    raw = m.group(1).lower().strip()
+    mapping = {
+        "upi": "UPI", "gpay": "UPI", "phonepe": "UPI", "paytm": "UPI",
+        "cash": "Cash", "card": "Card", "credit card": "Card",
+        "debit card": "Card", "bank transfer": "Bank Transfer",
+    }
+    method = mapping.get(raw, raw.title())
+    
+    # Remove the 'via UPI' clause from text so category extraction isn't blocked
+    cleaned = (text[:m.start()] + text[m.end():]).strip()
+    return method, cleaned
+
+
 def _handle_add(original: str, normalized: str, session) -> dict:
     try:
-        note             = None
-        original_clean   = original
+        note = None
+        original_clean = original
         normalized_clean = normalized
 
+        # 1. Extract note if present
         if " note " in normalized:
-            parts            = normalized.split(" note ", 1)
+            parts = normalized.split(" note ", 1)
             normalized_clean = parts[0].strip()
-            note             = parts[1].strip()
-            original_clean   = original[:original.lower().index(" note ")].strip()
+            note = parts[1].strip()
+            original_clean = original[:original.lower().index(" note ")].strip()
 
+        # 2. Extract payment method AND clean it from the text
+        payment_method, original_clean = _extract_payment_method(original_clean)
+        normalized_clean = original_clean.lower()
+
+        # 3. Extract transaction details
         txn_type = _extract_type(normalized_clean)
         if txn_type is None:
             return {"matched": False}
@@ -459,15 +475,30 @@ def _handle_add(original: str, normalized: str, session) -> dict:
         category = _extract_category(original_clean)
         if category is None:
             return {"matched": False}
-        category = category.title()   # normalize casing — "food" and "Food" must match the same row
+        category = category.title()
 
         txn_date = _extract_date(normalized_clean)
         if txn_date is None:
             return {"matched": False}
 
         db = session.db_session
+        currency = _get_currency(session)
 
-        if not shared_txns.category_exists(db, session.user_id, category, txn_type):
+        # 4. Call central service
+        result = service_create_transaction(
+            db=db,
+            user_id=session.user_id,
+            type_=txn_type,
+            amount=amount,
+            category=category,
+            date=txn_date,
+            note=note or "",
+            payment_method=payment_method,
+            allow_create_category=False,
+            allow_create_payment_method=False,
+        )
+
+        if result.status == ServiceStatus.CATEGORY_NOT_FOUND:
             session.state.set_pending_direct({
                 "action_type": "new_category",
                 "category": category,
@@ -475,8 +506,8 @@ def _handle_add(original: str, normalized: str, session) -> dict:
                 "amount": amount,
                 "date_str": txn_date,
                 "note": note or "",
+                "payment_method": payment_method,
             })
-            currency = _get_currency(session)
             return {
                 "matched": True,
                 "response": (
@@ -486,35 +517,52 @@ def _handle_add(original: str, normalized: str, session) -> dict:
                 ),
             }
 
-        result = _add_transaction(db, session.user_id, txn_type, amount, category, txn_date, note)
+        if result.status == ServiceStatus.PAYMENT_METHOD_NOT_FOUND:
+            session.state.set_pending_direct({
+                "action_type": "new_payment_method",
+                "category": category,
+                "txn_type": txn_type,
+                "amount": amount,
+                "date_str": txn_date,
+                "note": note or "",
+                "payment_method": payment_method,
+            })
+            return {
+                "matched": True,
+                "response": (
+                    f"'{payment_method}' isn't a registered payment method yet. Add it and log this "
+                    f"{txn_type} of {currency}{amount:,.0f}? Reply yes to confirm or no to cancel."
+                ),
+            }
 
-        if not result.get("success"):
+        # If duplicate detected, bail out to LLM
+        if result.status == ServiceStatus.DUPLICATE_DETECTED:
             return {"matched": False}
 
-        if result.get("warning") == "possible duplicate":
+        if result.status != ServiceStatus.CREATED:
             return {"matched": False}
 
-        currency  = _get_currency(session)
+        # 5. Format response string
         month_str = txn_date[:7]
         breakdown = _category_breakdown(db, session.user_id, txn_type, month_str)
         cat_total = breakdown.get(category, 0)
 
-        date_obj   = date.fromisoformat(txn_date)
+        date_obj = date.fromisoformat(txn_date)
         date_label = (
-            "today"     if date_obj == date.today()
+            "today" if date_obj == date.today()
             else "yesterday" if date_obj == date.today() - timedelta(days=1)
             else date_obj.strftime("%b %d")
         )
 
         type_label = "income" if txn_type == "income" else "expense"
-        response   = (
-            f"Added {currency}{amount:,.0f} for {category} {date_label}. "
+        pm_suffix = f" via {payment_method}" if payment_method else ""
+        response = (
+            f"Added {currency}{amount:,.0f} for {category}{pm_suffix} {date_label}. "
             f"{category} {type_label} this month: {currency}{cat_total:,.0f}."
         )
         return {"matched": True, "response": response}
 
     except Exception as e:
-        if DEBUG: print(f"[PM] ✗ exception in _handle_add: {e}")
         return {"matched": False}
 
 

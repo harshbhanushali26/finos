@@ -1,11 +1,14 @@
 """Session module — manages user context and conversation history for FinOS agent."""
 
+import json
 from pathlib import Path
 from datetime import datetime
 
 from agent.state import DependencyState
-from sqlmodel import Session as DBSession
+from sqlmodel import Session as DBSession, select
 
+from agent.state import DependencyState
+from core.models import AgentSessionRecord
 from config import TOOL_RESULTS_TO_KEEP, TOOL_RESULT_TRIM_LENGTH
 
 
@@ -34,7 +37,8 @@ class Session:
         self.db_session = db_session
         self.history = []
         self.created_at = datetime.now()
-        self.state = DependencyState()
+        # self.state = DependencyState()
+        self.state = DependencyState(user_id=self.user_id, db=self.db_session)
 
     # ── History management ─────────────────────────────────────────────────────
 
@@ -142,3 +146,24 @@ class Session:
     def get_last_message(self) -> dict | None:
         """Return the last message in history, or None if empty."""
         return self.history[-1] if self.history else None
+
+    # In agent/session.py:
+    def _load_history(self) -> list:
+        record = self.db_session.exec(
+            select(AgentSessionRecord).where(AgentSessionRecord.user_id == self.user_id)
+        ).first()
+        if not record:
+            record = AgentSessionRecord(user_id=self.user_id, history_json="[]")
+            self.db_session.add(record)
+            self.db_session.commit()
+            return []
+        return json.loads(record.history_json)
+
+    def _save_history(self):
+        record = self.db_session.exec(
+            select(AgentSessionRecord).where(AgentSessionRecord.user_id == self.user_id)
+        ).first()
+        if record:
+            record.history_json = json.dumps(self.history)
+            self.db_session.add(record)
+            self.db_session.commit()

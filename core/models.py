@@ -67,3 +67,25 @@ class Session(SQLModel, table=True):
     token: str = Field(unique=True, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: Optional[datetime] = Field(default=None)
+
+
+class AgentSessionRecord(SQLModel, table=True):
+    """Persists conversation history across server restarts."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True, unique=True)
+    history_json: str = Field(default="[]")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AgentPendingAction(SQLModel, table=True):
+    """Persists active confirmation and candidate selection states in DB."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True, unique=True)
+    mode: str = Field(default="idle")           # "idle" | "await_select" | "await_confirm"
+    action_type: Optional[str] = Field(default=None)
+    payload_json: str = Field(default="{}")     # Serialized pending action details
+    candidates_json: str = Field(default="[]")   # Serialized candidates list
+    step_storage_json: str = Field(default="{}") # Stored view step outputs
+    step_counter: int = Field(default=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

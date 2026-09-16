@@ -1,3 +1,4 @@
+
 # 💸 FinOS
 **The Intelligent Personal Finance Operating System**
 
@@ -101,7 +102,7 @@ Both tabs share the same Week/Month/Year period filter in the top bar (defaults 
 
 Every user action follows one of three paths:
 
-```
+
 User Action
 │
 ├── Dashboard form submit
@@ -117,7 +118,7 @@ User Action
       └── LLM orchestrator → Groq → tool call → database → SSE stream
             1–2 LLM calls, streamed word by word
             e.g. "compare this month vs last", "why am I overspending?"
-```
+
 
 The agent loop uses a multi-tiered decision engine:
 
@@ -139,7 +140,7 @@ graph TD
 - `parallel_tool_calls=False` — prevents malformed outputs from the model
 - `tool_choice="none"` on the second LLM call — prevents runaway tool loops
 - No `console.print` or Rich output inside tool functions — would corrupt the SSE stream
-- `DependencyState` is in-memory only — not persisted to the database
+- `DependencyState` is backed by `AgentPendingAction` in SQLite — multi-turn confirmations survive server restarts
 
 ---
 
@@ -164,6 +165,7 @@ finos/
 ├── core/
 │   ├── database.py            # SQLite engine (WAL mode), session factory
 │   ├── models.py               # SQLModel table definitions (incl. PaymentMethod, Session.expires_at)
+│   ├── services.py             # central transaction service layer (typed results, unified query builder)
 │   ├── auth.py                 # bcrypt hashing, sliding-expiry session token logic
 │   └── utils.py                 # shared date-math helpers (current_month_range, get_last_n_months)
 ├── agent/
@@ -183,6 +185,10 @@ finos/
 │   ├── tool_analytics.py
 │   ├── tool_budget.py
 │   └── tool_settings.py
+├── tests/
+│   ├── test_services.py        # unit tests for domain services (15 tests)
+│   ├── test_api_transactions.py # integration tests for REST API (7 tests)
+│   └── test_agent_and_tools.py # unit tests for LLM tools & pattern matcher (5 tests)
 ├── frontend/
 │   ├── index.html             # marketing landing page
 │   ├── app.html                # app shell — auth screen + sidebar + dashboard + all pages
@@ -266,6 +272,12 @@ Open `http://localhost:8000` in your browser. Sign up for an account on the auth
 
 The interactive API docs are available at `http://localhost:8000/docs`.
 
+### Run Tests
+
+```bash
+uv run pytest -v
+```
+
 ### Locked out?
 
 ```bash
@@ -309,14 +321,6 @@ categories            → list all categories
 ---
 
 ## 🗺️ Roadmap
-
-
-**In Progress — Service Consolidation & Architecture Modernization**
-- **Unified Transaction Service Layer (`core/services.py`)** — Centralize all transaction business logic (duplicate checking, category policies, query filtering) into a pure domain layer returning typed dataclasses, turning the REST API, LLM tools, and pattern matcher into thin adapters.
-- **First-Class Payment Methods in Agent** — Bring full payment method support (Cash, Card, UPI, Bank Transfer) to the AI chat agent with natural language regex extraction in the pattern matcher and updated tool schemas.
-- **Persistent DB-Backed Agent State** — Replace in-memory chat session dictionaries and custom dependency state with persistent SQLModel tables (`AgentSessionRecord`, `AgentPendingAction`), ensuring multi-turn confirmation flows and conversation history survive server restarts and multi-worker deployments.
-
-
 
 **Next up**
 - Receipt photo scan via Groq vision (`meta-llama/llama-4-scout-17b-16e-instruct`) → pre-fills the Add Transaction form → user confirms before it saves

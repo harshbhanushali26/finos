@@ -77,38 +77,6 @@ def pydantic_to_groq(model: type[BaseModel], name: str, description: str) -> dic
     }
 
 
-# ── Transaction Schemas ────────────────────────────────────────────────────────
-
-class AddTransaction(BaseModel):
-    type_: Literal["income", "expense"] = Field(description="Type of transaction")
-    amount: float = Field(description="Transaction amount in INR")
-    category: str = Field(description="Category name e.g. food, transport, salary")
-    date: str = Field(description="Date in YYYY-MM-DD format")
-    description: Optional[str] = Field(default=None, description="Optional short description")
-
-
-class UpdateTransaction(BaseModel):
-    txn_id: str = Field(description="Transaction UUID to update")
-    amount: Optional[float] = Field(default=None, description="New amount")
-    category: Optional[str] = Field(default=None, description="New category")
-    date: Optional[str] = Field(default=None, description="New date in YYYY-MM-DD format")
-    description: Optional[str] = Field(default=None, description="New description")
-    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="New transaction type")
-
-
-class DeleteTransaction(BaseModel):
-    txn_id: str = Field(description="Transaction UUID to delete")
-
-
-class ViewTransactions(BaseModel):
-    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type")
-    category: Optional[str] = Field(default=None, description="Filter by category")
-    date: Optional[str] = Field(default=None, description="Exact date YYYY-MM-DD")
-    from_date: Optional[str] = Field(default=None, description="Start of date range YYYY-MM-DD")
-    to_date: Optional[str] = Field(default=None, description="End of date range YYYY-MM-DD")
-    month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM")
-
-
 # ── Analytics Schemas ──────────────────────────────────────────────────────────
 
 class GetDailySummary(BaseModel):
@@ -168,12 +136,45 @@ class SetPreference(BaseModel):
     value: str = Field(description="New value for the preference")
 
 
-# ── Dependency + txn Schemas ─────────────────────────────────────────────────────────────
+# ── Transaction Schemas ────────────────────────────────────────────────────────
+
+class AddTransaction(BaseModel):
+    type_: Literal["income", "expense"] = Field(description="Type of transaction")
+    amount: float = Field(description="Transaction amount in INR")
+    category: str = Field(description="Category name e.g. food, transport, salary")
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    description: Optional[str] = Field(default=None, description="Optional short description")
+    payment_method: Optional[str] = Field(default=None, description="Optional payment method e.g. Cash, Card, UPI, Bank Transfer")
+
+
+class UpdateTransaction(BaseModel):
+    txn_id: str = Field(description="Transaction ID to update")
+    amount: Optional[float] = Field(default=None, description="New amount")
+    category: Optional[str] = Field(default=None, description="New category")
+    date: Optional[str] = Field(default=None, description="New date in YYYY-MM-DD format")
+    description: Optional[str] = Field(default=None, description="New description")
+    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="New transaction type")
+    payment_method: Optional[str] = Field(default=None, description="New payment method")
+
+
+class DeleteTransaction(BaseModel):
+    txn_id: str = Field(description="Transaction ID to delete")
+
+
+class ViewTransactions(BaseModel):
+    type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type")
+    category: Optional[str] = Field(default=None, description="Filter by category")
+    payment_method: Optional[str] = Field(default=None, description="Filter by payment method")
+    date: Optional[str] = Field(default=None, description="Exact date YYYY-MM-DD")
+    from_date: Optional[str] = Field(default=None, description="Start of date range YYYY-MM-DD")
+    to_date: Optional[str] = Field(default=None, description="End of date range YYYY-MM-DD")
+    month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM")
 
 
 class StageDelete(BaseModel):
     type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type")
     category: Optional[str] = Field(default=None, description="Filter by category name")
+    payment_method: Optional[str] = Field(default=None, description="Filter by payment method")
     month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM")
     date: Optional[str] = Field(default=None, description="Filter by exact date YYYY-MM-DD")
     limit: Optional[int] = Field(default=None, description="Max number of matches to stage — pass 1 when user says 'last' or 'latest' transaction")
@@ -182,6 +183,7 @@ class StageDelete(BaseModel):
 class StageUpdate(BaseModel):
     type_: Optional[Literal["income", "expense"]] = Field(default=None, description="Filter by type, to find the transaction(s) to update")
     category: Optional[str] = Field(default=None, description="Filter by category name, to find the transaction(s) to update")
+    payment_method: Optional[str] = Field(default=None, description="Filter by payment method")
     month: Optional[str] = Field(default=None, description="Filter by month YYYY-MM, to find the transaction(s) to update")
     date: Optional[str] = Field(default=None, description="Filter by exact date YYYY-MM-DD, to find the transaction(s) to update")
     limit: Optional[int] = Field(default=None, description="Max number of matches to stage — pass 1 when user says 'last' or 'latest' transaction")
@@ -189,3 +191,4 @@ class StageUpdate(BaseModel):
     new_category: Optional[str] = Field(default=None, description="New category to set")
     new_date: Optional[str] = Field(default=None, description="New date YYYY-MM-DD to set")
     new_note: Optional[str] = Field(default=None, description="New note/description to set")
+    new_payment_method: Optional[str] = Field(default=None, description="New payment method to set")
